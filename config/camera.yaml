@@ -1,0 +1,72 @@
+%YAML:1.0
+# ============================================================================
+# Galaxy MER-139-210U3C  大恒水星 USB3.0 工业相机
+# ============================================================================
+# 机身固定，镜头可更换。换镜头后需要：
+#   1. 重新标定 → 更新下方的内参+畸变系数
+#   2. 同步更新 control.yaml 的 fx/fy/cx/cy
+#   3. 同步更新 parallax.yaml 的 fx/fy (如果使用视差工具)
+#   4. ROI 参数可能需要调整 (视场角变化)
+
+# ── 编译模式 (CMake 构建时读取) ──
+compute_mode: "gpu"            # gpu | cpu
+
+# ── 相机曝光参数 (赛场光照条件不同，需要根据现场调整) ──
+auto_exposure: 0                  # 0=手动 1=自动
+exposure_time_us: 1000.0          # 手动曝光(us)，压运动拖影
+auto_gain: 1                      # 0=手动 1=自动
+gain: 0.0                         # 手动增益 (auto_gain=0 时生效)
+balance_white_auto: 1             # 0=关闭 1=自动白平衡
+
+# ── ROI: 1280x1024 → 中心裁剪 (换镜头后可能需调整) ──
+# 全分辨率: roi_enable: 0 或 roi_width=1280, roi_height=1024
+# 远距离(20-30m)建议: 1280x1024 全分辨率以最大化小目标检测精度
+roi_enable: 1
+roi_offset_x: 0
+roi_offset_y: 0
+roi_width: 1280
+roi_height: 1024
+
+# ── 抓取策略 ──
+grab_strategy: 1               # 0=顺序 1=最新帧
+
+# ── 畸变校正 (标定参数与镜头绑定) ──
+undistort_enable: 1
+calib_path: "camera.yaml"
+# 当前镜头: MVL-KF3528M-12MP (35mm)
+# 原始标定重投影误差: 0.0709px
+image_width: 1280
+image_height: 1024
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [1293.007932, 0.0, 641.030179,
+         0.0, 1292.259697, 493.263068,
+         0.0, 0.0, 1.0]
+
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.078205, 0.137579, -0.000738, -0.000547, 0.0]
+
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [1293.007932, 0.0, 641.030179, 0.0,
+         0.0, 1292.259697, 493.263068, 0.0,
+         0.0, 0.0, 1.0, 0.0]
+
+# ── GPU 加速管线 ──
+zero_copy_enable: 1
+gpu_pipeline_enable: 1
+gpu_demosaic_enable: 1
+gpu_demosaic_backend: "npp"
+force_swap_rb: 1               # 修正红蓝反色

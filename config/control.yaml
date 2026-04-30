@@ -1,0 +1,103 @@
+%YAML:1.0
+
+# ============================================================================
+# 控制器参数 — PID + 前馈 + 阻尼 + 搜索 + 启动
+# ============================================================================
+
+# ── 方向符号 ──
+yaw_sign: -1.0
+pitch_sign: -1.0
+
+# ── PID ──
+kp: 3.0
+deadband_px: 1.0
+max_angle_rate: 180.0
+lowpass_alpha: 0.7
+ctrl_dt_nominal_ms: 10.0
+ctrl_dt_min_ms: 1.0
+ctrl_dt_max_ms: 100.0
+
+# ── 前馈 ──
+use_velocity_ff: 1
+ff_alpha: 0.5
+ff_rate_max: 150.0
+ff_dt_max_ms: 80.0
+
+# ── 阻尼 ──
+# "meas" = 测量速度(更快)  "gimbal" = 云台角速度反馈(更稳)
+use_damping: 1
+damping_source: "meas"
+damping_kd: 0.008
+damping_dt_max_ms: 120
+
+# ── 丢失目标搜索 ──
+scan_enable: 1
+scan_pattern: "spiral"          # circle | spiral
+scan_radius_deg: 12.0           # circle 模式半径(度)
+scan_rate_hz: 0.2               # circle 模式频率(Hz)
+scan_spacing_deg: 6.05          # spiral 圈间距(度)
+scan_speed_deg_s: 25.0          # spiral 路径速度(度/秒)
+scan_r_max_deg: 15.0            # spiral 最大半径(度)
+scan_spiral_return: 0           # 0=只外扩 1=往复
+scan_k_yaw: 2.5                 # 椭圆比例 yaw (左右宽)
+scan_k_pitch: 0.75              # 椭圆比例 pitch (上下窄)
+scan_enter_delay_ms: 180
+scan_reacq_confirm_frames: 2
+
+# ── 启动策略 ──
+startup_check_frames: 5
+startup_home_pitch: 0.0
+startup_home_yaw: 0.0
+startup_prep_ms: 1000
+startup_hold_ms: 200
+startup_home_ms: 600
+startup_validate_ms: 200
+startup_min_state_frames: 1
+startup_require_home: 1
+startup_home_tol_deg: 1.0
+startup_home_max_extra_ms: 1000
+startup_validate_first: 1
+startup_allow_early_exit: 1
+
+# ── 延迟补偿 (借鉴 sp_vision 弹道补偿思路) ──
+# 激光是光速无需弹道补偿, 但系统延迟 (检测+通信+云台) 需要补偿
+# 用 Kalman 速度预测目标在 delay 后的位置, 提前瞄过去
+delay_compensate: 1
+system_delay_ms: 10.0             # 总软件延迟 (ms), 不含云台机械延迟
+                                  # 实测方法: 看日志 STAT_CTRL meas_age_ms 的值
+                                  # 如需加云台延迟, 问电控 PID 阶跃响应时间
+
+# ── 自适应增益 ──
+# 远距离 bbox 小, 像素误差小但角度误差不变, 需要更大 kp
+# bbox 面积在 [kp_far_area, kp_near_area] 之间线性插值
+adaptive_kp: 0                    # 0=关闭用固定kp, 1=启用自适应
+kp_near: 3.0                     # bbox > 8000px² 时的 kp (近距离)
+kp_far: 6.0                      # bbox < 800px² 时的 kp (远距离)
+kp_near_area: 8000.0             # 近距离 bbox 面积阈值 (px²)
+kp_far_area: 800.0               # 远距离 bbox 面积阈值 (px²)
+
+# ── 相机内参 ──
+# 从 config/camera.yaml 的 camera_matrix 读取 (fx, fy, cx, cy)
+# 换镜头后需同步更新 camera.yaml
+
+# ── 相机-云台外参 (sp_vision 标定) ──
+R_camera2gimbal: [0.01564436347592291, -0.0094715160352174654, 0.99983275815279637,
+                  -0.99986472826106809, 0.0049295109553235206, 0.015691561463454833,
+                  -0.0050773094108242916, -0.99994299352799898, -0.0093931157456294424]
+t_camera2gimbal: [0.075368216619198847, 0.0014648496765427086, 0.00088236758196906485]
+
+# ── 激光偏移 (相机坐标系, 尺子量) ──
+# 激光在相机下方 3.3cm → camera_Y 方向 +0.033m (OpenCV: Y轴朝下)
+# 激光在相机后方/前方 → camera_Z 方向 (暂设0)
+laser_offset_y: 0.030205    # 米, 激光在相机下方的距离
+laser_offset_x: 0.000339    # 米, 激光在相机右侧的距离 (水平偏移)
+
+# ── 目标物理尺寸 (S190 激光检测模块, 制作规范手册 V1.4.0) ──
+# 整体: 72mm(高) × 50mm(宽) × 50mm(深), 检测区域 φ42mm, 中空 φ20mm
+target_height_m: 0.072    # 米, 模块总高度 (72mm)
+target_width_m:  0.050    # 米, 模块宽度 (50mm, 正六棱柱外接)
+target_detect_diameter_m: 0.042  # 米, 检测区域直径 (φ42mm)
+
+# ── Boresight (备用, 无动态补偿时使用) ──
+u_L: 641.0
+v_L: 493.0

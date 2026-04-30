@@ -1,0 +1,47 @@
+# Build
+build/
+src/build/
+tests/build/
+*/build/
+
+# Install
+install/
+*/install/
+
+# Records (auto-generated videos)
+records/
+
+# Logs
+logs/
+src/log/
+*.log
+
+# Datasets / training data
+dataset/
+*/dataset/
+
+# Python env
+.venv/
+__pycache__/
+*.pyc
+
+# Local runtime state
+config/.boresight_exposure
+trajectory_log.yaml
+
+# Generated sample artifacts
+obj/
+
+# Large third-party binaries that exceed GitHub limits
+src/thirdparty/onnxruntime-linux-x64-gpu-1.23.2/
+src/thirdparty/onnxruntime-linux-x64-gpu-1.23.2.tgz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
