@@ -30,19 +30,26 @@ damping_source: "meas"
 damping_kd: 0.008
 damping_dt_max_ms: 120
 
-# ── 丢失目标搜索 ──
+# ── 丢失目标微扫 + 安全策略 ──
+# yaw: 小幅慢扫
+# pitch: 渐进回归到目标常出现的位置(EMA记忆), 不允许极端抬头/低头
 scan_enable: 1
-scan_pattern: "spiral"          # circle | spiral
-scan_radius_deg: 12.0           # circle 模式半径(度)
-scan_rate_hz: 0.2               # circle 模式频率(Hz)
-scan_spacing_deg: 6.05          # spiral 圈间距(度)
-scan_speed_deg_s: 25.0          # spiral 路径速度(度/秒)
-scan_r_max_deg: 15.0            # spiral 最大半径(度)
-scan_spiral_return: 0           # 0=只外扩 1=往复
-scan_k_yaw: 2.5                 # 椭圆比例 yaw (左右宽)
-scan_k_pitch: 0.75              # 椭圆比例 pitch (上下窄)
+scan_radius_deg: 0.8            # yaw 微扫幅度(度) [兼容旧字段]
+scan_rate_hz: 0.12              # yaw 微扫频率(Hz) [兼容旧字段]
 scan_enter_delay_ms: 180
 scan_reacq_confirm_frames: 2
+lost_yaw_scan_amp: 0.5          # 丢失时 yaw 扫描幅度(度), 很小
+lost_yaw_scan_rate: 0.08        # 丢失时 yaw 扫描频率(Hz), 比正常慢
+lost_pitch_home: 0.0            # 丢失后 pitch 回归目标(度), 0=水平
+lost_pitch_return_rate: 5.0     # pitch 回归速度(deg/s), 慢慢回
+lost_pitch_max: 15.0            # pitch 绝对上限(度), 防极端抬头
+lost_pitch_min: -15.0           # pitch 绝对下限(度), 防极端低头
+lost_pitch_use_ema: 1           # 用EMA记住目标常出现的pitch
+lost_pitch_ema_alpha: 0.02      # EMA系数(越小越稳定)
+
+# ── 指令限幅 (防止绝对值突变导致电控疯掉) ──
+cmd_max_yaw_step_deg: 5.0       # 单帧 yaw 最大变化(度)
+cmd_max_pitch_step_deg: 3.0     # 单帧 pitch 最大变化(度)
 
 # ── 启动策略 ──
 startup_check_frames: 5
@@ -87,17 +94,14 @@ R_camera2gimbal: [0.01564436347592291, -0.0094715160352174654, 0.999832758152796
 t_camera2gimbal: [0.075368216619198847, 0.0014648496765427086, 0.00088236758196906485]
 
 # ── 激光偏移 (相机坐标系, 尺子量) ──
-# 激光在相机下方 3.3cm → camera_Y 方向 +0.033m (OpenCV: Y轴朝下)
+# OpenCV 里 Y 轴向下为正, 所以下方偏移写正值
 # 激光在相机后方/前方 → camera_Z 方向 (暂设0)
-laser_offset_y: 0.030205    # 米, 激光在相机下方的距离
-laser_offset_x: 0.000339    # 米, 激光在相机右侧的距离 (水平偏移)
+laser_offset_y: 0.033905     # 米, 激光在相机下方的距离
+laser_offset_x: 0.000339     # 米, 激光在相机右侧的距离 (水平偏移)
 
 # ── 目标物理尺寸 (S190 激光检测模块, 制作规范手册 V1.4.0) ──
 # 整体: 72mm(高) × 50mm(宽) × 50mm(深), 检测区域 φ42mm, 中空 φ20mm
-target_height_m: 0.072    # 米, 模块总高度 (72mm)
+target_height_m: 0.050    # 米, 模块高度 (50mm)
 target_width_m:  0.050    # 米, 模块宽度 (50mm, 正六棱柱外接)
 target_detect_diameter_m: 0.042  # 米, 检测区域直径 (φ42mm)
 
-# ── Boresight (备用, 无动态补偿时使用) ──
-u_L: 641.0
-v_L: 493.0

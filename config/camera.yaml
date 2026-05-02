@@ -21,7 +21,7 @@ balance_white_auto: 1             # 0=关闭 1=自动白平衡
 # ── ROI: 1280x1024 → 中心裁剪 (换镜头后可能需调整) ──
 # 全分辨率: roi_enable: 0 或 roi_width=1280, roi_height=1024
 # 远距离(20-30m)建议: 1280x1024 全分辨率以最大化小目标检测精度
-roi_enable: 1
+roi_enable: 0
 roi_offset_x: 0
 roi_offset_y: 0
 roi_width: 1280

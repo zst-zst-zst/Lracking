@@ -1,57 +1,54 @@
 # galaxy_camera
 
-- 当前现场型号：`MER-139-210U3C`。
-- 原生分辨率：`1280x1024 @ 210fps`。
-- 当前实现按 USB 相机链路运行（仅枚举 U3V/USB2 设备）。
-- 默认配置从 `1280x1024` 中心裁出 `640x480` ROI，便于直接联调 detector。
+当前仓库里的相机模块是一个静态库，不再单独在 `src/camera` 下生成 demo；常用验证入口已经移到 [tests/README.md](../../tests/README.md)。
 
-## 构建
+## 当前职责
 
-默认使用仓库内置 SDK：`src/camera/galaxy_sdk`。
+- 调用仓库内置 `Galaxy SDK`
+- 加载 `config/camera.yaml`
+- 完成采集、ROI、可选畸变校正
+- 决定出图是走 CPU 还是 GPU 去马赛克路径
 
-```bash
-cmake -S src -B src/build
-cmake --build src/build --target galaxy_camera_demo detector_galaxy_demo -j$(nproc)
-```
+`src/camera/CMakeLists.txt` 会优先使用 `src/camera/galaxy_sdk` 作为 `GALAXY_SDK_ROOT`。
 
-GPU/CPU 切换改成配置文件控制（不需要两条 CMake 命令）：
+## 你最常改的几个开关
 
-```bash
-vim config/camera_build.yaml   # compute_mode: "gpu" 或 "cpu"
-cmake -S src -B src/build
-```
+### `output_bgr`
 
-## 运行
+这不是“相机会不会拍出彩色图”，而是“上层拿到的是不是已经转好的 BGR 图”。
 
-相机 demo：
+- 设为 1：上层更容易直接用 OpenCV 显示彩色画面
+- 设为 0：上层可能拿到原始 Bayer 或灰度数据，很多 demo 就不会自动显示彩色图
 
-```bash
-./src/build/camera/galaxy_camera_demo --config config/camera.yaml --show
-```
+如果你在某台机器上只想先把链路跑通，通常保留 `output_bgr: 1` 更省事。
 
-检测 demo：
+### `undistort_enable` / `calib_path`
 
-```bash
-./src/build/detector/detector_galaxy_demo --camera-config config/camera.yaml
-```
+这组参数只管一件事：出图前要不要做去畸变。
 
-## 配置说明
+- `undistort_enable`：是否开启去畸变
+- `calib_path`：畸变参数文件路径
+- `camera_matrix` / `distortion_coefficients`：相机内参和畸变参数本身
 
-- `serial_number` / `use_first_device` / `device_index`：设备选择。
-- `trigger_mode` / `trigger_source`：连续采集或外部触发。
-- `frame_rate_enable` / `frame_rate`：默认 `120fps`，比旧配置里的 `19.2fps` 更适合跟踪联调。
-- `roi_enable` / `roi_width` / `roi_height`：默认启用从 `1280x1024` 中心裁出的 `640x480` ROI。
-- `undistort_enable` + `calib_path`：当前默认开启并使用 `config/camera_ost.yaml`。
-- `feature_load_enable`：默认关闭；启用前请换成当前相机重新导出的 `.mfs`，否则可能覆盖 ROI / Width / Height。
-- `gpu_pipeline_enable` / `gpu_demosaic_enable`：GPU 去马赛克开关（NPP 路径）。
-- 若希望尽量走纯 GPU 链路，建议设置 `output_bgr=0`（避免每帧 D2H 拷回 CPU）。
-- 红蓝通道相关 Bayer 处理按相机每帧上报的 `pixel_type` 自动判断，不从配置读取 `bayer_pattern`。
+`loadCameraConfig()` 会按配置文件所在目录解析相对路径，所以你在 `config/camera.yaml` 里写相对路径时，不用手工改成绝对路径。
 
-如需回到全分辨率，直接把 `roi_enable` 改成 `0`，或按相机支持范围改 `roi_width` / `roi_height`。
+### GPU 管线
 
-## 说明
+这几项只在你想走 GPU 去马赛克时才有意义：
 
-- 相对路径默认以配置文件所在目录解析。
-- `config/` 开头的相对路径会自动映射到项目根目录 `config/`。
-- 若运行时报找不到 `libgxiapi.so`，检查 `GALAXY_SDK_ROOT` 和运行时库路径是否一致。
-- 如需回到相机全分辨率，直接把 `roi_enable` 设为 `0`。
+- `gpu_pipeline_enable`
+- `gpu_demosaic_enable`
+- `gpu_demosaic_backend`
+- `gpu_device_id`
+- `force_swap_rb`
+
+如果机器上没有独立 NVIDIA GPU，或者你只是想保证比赛现场能稳定跑，直接把 `gpu_pipeline_enable` 和 `gpu_demosaic_enable` 关掉就行，走 CPU 路径最稳。
+
+`gpu_device_id` 只在多 GPU 机器上需要调，`force_swap_rb` 只有颜色通道顺序不对时才改。
+
+## 现状说明
+
+- 当前默认配置文件是 `config/camera.yaml`
+- 不存在单独的 `config/camera_build.yaml`
+- 当前源码里不再维护 `detector_galaxy_demo`
+- 相机相关验证入口请看 [tests/README.md](../../tests/README.md)

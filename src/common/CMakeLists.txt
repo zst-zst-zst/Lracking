@@ -12,7 +12,7 @@ find_package(OpenCV REQUIRED)
 
 add_library(common STATIC
   src/time_utils.cpp
-  src/config_io.cpp
+  # config_io.cpp 已合并入 control/config.cpp (功能重复)
 )
 
 target_include_directories(common

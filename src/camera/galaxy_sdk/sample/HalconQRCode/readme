@@ -1,21 +1,32 @@
-Halcon sample
-=================
+HalconQRCode sample（仓库说明）
+=============================
 
-For using Halcon sample.
+这是 Galaxy SDK 自带的 Halcon 示例，不属于 Tracking 主链路，也不会被仓库当前的 CMake 自动构建。
 
-You need to install Halcon completely(Download from https://www.mvtec.com/download/halcon/).
+当前用途
+========
 
-And make sure you have "$HALCONROOT" and "$HALCONARCH" in your environment.
+- 验证厂商 SDK 示例是否能独立运行
+- 验证 Halcon 与 Galaxy SDK 的联动环境
 
-1. $HALCONROOT
-	The path you chose when installing Halcon.
-	"lib" and "include" directory must exist under this path.
-2. $HALCONARCH
-	This environment variable is related to your system architecture.
-	This variable must be the same as the folder name under the "$HALCONROOT/lib/", so you can directly make the Halcon sample program.
+主工程本身
+==========
 
+- 不依赖这个 sample
+- 不需要 Halcon 才能构建 `Tracking`
 
-Notice
-=================
+如果你要单独编这个 sample
+==========================
 
-When using Dongle, you may need to use "sudo" to elevate privileges to execute this sample.
+需要先安装 Halcon，并保证下面两个环境变量可用：
+
+- `HALCONROOT`
+- `HALCONARCH`
+
+然后在当前目录手动执行 `make`。
+
+备注
+====
+
+- 如果使用 Halcon 加密狗，可能需要额外权限
+- 这个目录保留为厂商样例，不建议把它当成主工程代码路径的一部分

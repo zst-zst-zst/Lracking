@@ -286,12 +286,14 @@ int main(int argc, char** argv) {
 
     control::ControlConfig ctrl_cfg;
     common::CameraModel cam_model;
-    common::Boresight boresight;
-    if (!loadControlConfig(control_config, &ctrl_cfg, &cam_model, &boresight, camera_config)) {
+    if (!loadControlConfig(control_config, &ctrl_cfg, &cam_model, nullptr, camera_config)) {
         std::cerr << "Failed to load control config\n";
         return 1;
     }
     control::Controller controller(ctrl_cfg);
+    common::Boresight center_boresight;
+    center_boresight.u_L = cam_model.cx;
+    center_boresight.v_L = cam_model.cy;
 
     galaxy_camera::GalaxyCamera camera;
     if (!camera.open(cam_cfg) || !camera.startGrabbing()) {
@@ -526,7 +528,7 @@ int main(int argc, char** argv) {
                 common::GimbalCommand cmd;
                 const bool has_new_meas = (use_meas.timestamp != last_meas_ts_used);
                 if (has_new_meas || !has_last_cmd) {
-                    cmd = controller.update(use_meas, cam_model, boresight, control_state);
+                    cmd = controller.update(use_meas, cam_model, center_boresight, control_state);
                     last_meas_ts_used = use_meas.timestamp;  // 只在新测量帧到来时更新控制指令，其它时间保持上一条指令；解决相机帧率低造成的 闭环自激振荡
                     if (!use_meas.valid) {
                         int64_t dbg_ts = common::nowMs();
@@ -540,6 +542,17 @@ int main(int argc, char** argv) {
                 } else {
                     cmd = last_cmd;
                     cmd.timestamp = common::nowMs();
+                }
+
+                if (use_meas.valid && primary.bbox.height > 2.0f) {
+                    constexpr double kRadToDeg = 180.0 / M_PI;
+                    const double z_est = cam_model.fy * ctrl_cfg.target_height_m / primary.bbox.height;
+                    if (z_est > 1e-6) {
+                        const double pitch_offset_deg = std::atan(ctrl_cfg.laser_offset_y / z_est) * kRadToDeg;
+                        const double yaw_offset_deg = std::atan(ctrl_cfg.laser_offset_x / z_est) * kRadToDeg;
+                        cmd.pitch -= static_cast<float>(ctrl_cfg.pitch_sign * pitch_offset_deg);
+                        cmd.yaw -= static_cast<float>(ctrl_cfg.yaw_sign * yaw_offset_deg);
+                    }
                 }
                 cmd.mode = static_cast<uint8_t>(common::GimbalCommandMode::Control);
 
@@ -736,6 +749,7 @@ int main(int argc, char** argv) {
             int64_t ts = common::nowMs();
             int64_t host_now_ms = common::nowSystemMs();
             std::vector<detect::Detection> dets;
+            const detect::Detection* best_det = nullptr;
             auto infer_start = std::chrono::steady_clock::now();
             if (got_frame) {
                 if (frame.host_timestamp > 0) {
@@ -777,6 +791,16 @@ int main(int argc, char** argv) {
                     d.confidence = result.predicted_confidence;
                     dets.push_back(d);
                 }
+                if (!dets.empty()) {
+                    best_det = &*std::max_element(
+                        dets.begin(), dets.end(),
+                        [](const detect::Detection& a, const detect::Detection& b) {
+                            if (a.confidence != b.confidence) {
+                                return a.confidence < b.confidence;
+                            }
+                            return a.radius < b.radius;
+                        });
+                }
                 auto infer_end = std::chrono::steady_clock::now();
                 double infer_ms = std::chrono::duration<double, std::milli>(infer_end - infer_start).count();
                 infer_ms_sum += infer_ms;
@@ -791,7 +815,15 @@ int main(int argc, char** argv) {
             common::TargetMeasurement meas;
             meas.timestamp = ts;
             if (!dets.empty()) {
-                meas = detect::toMeasurement(dets.front(), ts);
+                best_det = &*std::max_element(
+                    dets.begin(), dets.end(),
+                    [](const detect::Detection& a, const detect::Detection& b) {
+                        if (a.confidence != b.confidence) {
+                            return a.confidence < b.confidence;
+                        }
+                        return a.radius < b.radius;
+                    });
+                meas = detect::toMeasurement(*best_det, ts);
             }
             // ── 延迟补偿: 估计像素速度 (px/s) ──
             if (meas.valid && vel_last_ts > 0) {
@@ -828,10 +860,10 @@ int main(int argc, char** argv) {
                 lost_streak = 0;
                 int64_t det_log_ts = ts;
                 if (det_log_ts - last_det_log_ts >= 1000) {
-                    if (!dets.empty()) {
-                        const auto& det = dets.front();
-                        double du = det.center.x - boresight.u_L;
-                        double dv = det.center.y - boresight.v_L;
+                    if (best_det) {
+                        const auto& det = *best_det;
+                        double du = det.center.x - center_boresight.u_L;
+                        double dv = det.center.y - center_boresight.v_L;
                         std::cout << "DBG det_status ts=" << ts
                                   << " uv=(" << det.center.x << "," << det.center.y << ")"
                                   << " du=" << du << " dv=" << dv
@@ -847,7 +879,7 @@ int main(int argc, char** argv) {
                             std::cout << "na,na";
                         }
                         std::cout << ")"
-                                  << " boresight=(" << boresight.u_L << "," << boresight.v_L << ")"
+                                  << " boresight=(" << center_boresight.u_L << "," << center_boresight.v_L << ")"
                                   << "\n";
                     }
                     last_det_log_ts = det_log_ts;
@@ -866,8 +898,8 @@ int main(int argc, char** argv) {
                                   << " dist_px=" << dist
                                   << " uv=(" << meas.uv.x << "," << meas.uv.y << ")"
                                   << " last=(" << last_meas_uv.x << "," << last_meas_uv.y << ")\n";
-                        if (!dets.empty()) {
-                            const auto& det = dets.front();
+                        if (best_det) {
+                            const auto& det = *best_det;
                             std::cout << "DBG det0 center=(" << det.center.x << "," << det.center.y << ")"
                                       << " bbox=(" << det.bbox.x << "," << det.bbox.y
                                       << "," << det.bbox.width << "," << det.bbox.height << ")"
@@ -928,8 +960,8 @@ int main(int argc, char** argv) {
             if (has_cmd) {
                 double err_px = 0.0;
                 if (meas.valid) {
-                    double du = meas.uv.x - boresight.u_L;
-                    double dv = meas.uv.y - boresight.v_L;
+                    double du = meas.uv.x - center_boresight.u_L;
+                    double dv = meas.uv.y - center_boresight.v_L;
                     err_px = std::sqrt(du * du + dv * dv);
                 }
                 pushHistory(&err_history, err_px);
@@ -1012,8 +1044,8 @@ int main(int argc, char** argv) {
 
                 cv::Point boresight_pt(kDisplayWidth / 2, kDisplayHeight / 2);
                 if (got_frame) {
-                    boresight_pt = cv::Point(static_cast<int>(std::round(ox + boresight.u_L * sx)),
-                                             static_cast<int>(std::round(oy + boresight.v_L * sy)));
+                    boresight_pt = cv::Point(static_cast<int>(std::round(ox + center_boresight.u_L * sx)),
+                                             static_cast<int>(std::round(oy + center_boresight.v_L * sy)));
                 }
                 cv::drawMarker(view, boresight_pt, cv::Scalar(0, 0, 255),
                                cv::MARKER_CROSS, 30, 3, cv::LINE_AA);

@@ -41,6 +41,10 @@ if(BUILD_CONTROL)
   add_subdirectory(control)
 endif()
 
+if(NOT TARGET tracking)
+  add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../tracking ${CMAKE_BINARY_DIR}/tracking)
+endif()
+
 if(NOT TARGET plotter)
   add_subdirectory(plotter)
 endif()

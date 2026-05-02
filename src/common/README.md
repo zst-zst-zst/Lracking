@@ -1,29 +1,39 @@
 # common
 
-跨包共享的类型与配置工具，避免结构体分散定义。
+`common` 提供被多个模块共享的基础类型和小工具。
 
-## 输入/输出
+## 当前内容
 
-- 输入：配置文件（YAML）
-- 输出：统一数据结构与配置读取接口
+- `include/common/types.h`
+  - `TargetMeasurement`
+  - `GimbalState`
+  - `GimbalCommand`
+  - `CameraModel`
+  - `Boresight`
 
-## 共享结构
+- `include/common/time_utils.h`
+  - 单调时钟与系统时钟的毫秒时间工具
 
-- `common::TargetMeasurement`：检测输出（uv/置信度/时间戳）
-- `common::GimbalState`：云台回传（pitch/yaw/角速度/mode/四元数/弹速/弹数/时间戳，系统内部单位 deg/deg/s）
-- `common::GimbalCommand`：云台指令（pitch/yaw/角速度/角加速度/mode/时间戳，系统内部单位 deg/deg/s）
-- `common::CameraModel`：相机内参（fx/fy/cx/cy）
-- `common::Boresight`：激光/相机对准点（u_L/v_L）
+- `include/common/tee_buf.h`
+  - 把 `stdout` / `stderr` 同时写到终端和日志文件
 
-## 配置接口
+- `include/common/config_io.h`
+  - `loadCameraModel`
+  - `loadBoresight`
 
-- `common::loadCameraModel(path, &model)`
-- `common::loadBoresight(path, &boresight)`
-- `common::nowMs()`：主机毫秒时间戳
-## 坐标与单位约定
+## 现在的实际使用方式
 
-- yaw：左为正右为负
-- pitch：下为正上为负
-- 角度单位：deg
-- 角速度单位：deg/s
-- 串口协议层会自动转换为弧度制
+- 主控制链路通常通过 `control::loadControlConfig()` 从 `config/camera.yaml` 的 `camera_matrix.data` 里读取内参
+- `common::loadBoresight()` 读取的是 `control.yaml` 里的 `u_L` / `v_L`
+
+注意：
+
+- `common::loadCameraModel()` 读取的是扁平键 `fx` / `fy` / `cx` / `cy`
+- 当前仓库主用的 `config/camera.yaml` 不是这种扁平格式，因此这个接口更适合旧配置或额外小工具，不是主链路首选
+
+## 单位约定
+
+- 图像坐标：`u` 向右为正，`v` 向下为正
+- 云台角度：内部使用 `deg`
+- 云台角速度：内部使用 `deg/s`
+- 串口线缆侧现在也直接使用 `deg` / `deg/s` / `deg/s^2`

@@ -30,7 +30,6 @@
 #include "galaxy_camera/galaxy_camera.h"
 #include "common/types.h"
 #include "common/time_utils.h"
-#include "common/config_io.h"
 
 #include <algorithm>
 #include <atomic>
@@ -130,8 +129,7 @@ int main(int argc, char** argv) {
 
     control::ControlConfig ctrl_cfg;
     common::CameraModel cam_model;
-    common::Boresight boresight;
-    if (!control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, &boresight, camera_config)) {
+    if (!control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, nullptr, camera_config)) {
         std::cerr << "✗ 控制配置\n"; return 1;
     }
     control::Controller controller(ctrl_cfg);
@@ -231,7 +229,7 @@ int main(int argc, char** argv) {
             meas.confidence = d.confidence;
             meas.bbox_area = static_cast<float>(d.bbox.width) * d.bbox.height;
         }
-        auto cmd = controller.update(meas, cam_model, boresight, ctrl_state);
+        auto cmd = controller.update(meas, cam_model, ctrl_state);
         auto t4 = Clock::now();
         rec.ctrl_us = std::chrono::duration_cast<Us>(t4 - t3).count();
 

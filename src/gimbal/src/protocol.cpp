@@ -10,10 +10,6 @@
 namespace gimbal_serial {
 
 namespace {
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kRadToDeg = 180.0 / kPi;
-constexpr double kDegToRad = kPi / 180.0;
-
 #pragma pack(push, 1)
 struct RawGimbalToVision {
     uint8_t head[2];
@@ -43,14 +39,6 @@ struct RawVisionToGimbal {
 
 static_assert(sizeof(RawGimbalToVision) == kRxFrameSize, "Unexpected RX frame size");
 static_assert(sizeof(RawVisionToGimbal) == kTxFrameSize, "Unexpected TX frame size");
-
-float radToDeg(float value) {
-    return static_cast<float>(value * kRadToDeg);
-}
-
-float degToRad(float value) {
-    return static_cast<float>(value * kDegToRad);
-}
 
 float normalizeDeg(float value) {
     float wrapped = std::fmod(value, 360.0f);
@@ -83,10 +71,10 @@ bool parseGimbalState(const uint8_t* buf, size_t len, GimbalState* out) {
     std::memcpy(&frame, buf, sizeof(frame));
 
     out->mode = frame.mode;
-    out->yaw = radToDeg(frame.yaw);
-    out->yaw_rate = radToDeg(frame.yaw_vel);
-    out->pitch = radToDeg(frame.pitch);
-    out->pitch_rate = radToDeg(frame.pitch_vel);
+    out->yaw = frame.yaw;
+    out->yaw_rate = frame.yaw_vel;
+    out->pitch = frame.pitch;
+    out->pitch_rate = frame.pitch_vel;
     out->bullet_speed = 0.0f;
     out->bullet_count = 0;
     out->quaternion_wxyz = {1.0f, 0.0f, 0.0f, 0.0f};
@@ -105,19 +93,20 @@ void packGimbalCommand(const GimbalCommand& cmd,
 
     frame.mode = clampTxMode(cmd.mode);
 
-    float yaw_delta_deg = normalizeDeg(cmd.yaw - state.yaw);
-    float pitch_delta_deg = normalizeDeg(cmd.pitch - state.pitch);
+    // 下发绝对角指令，协议里直接写目标角度（度）
+    float yaw_abs_deg = normalizeDeg(cmd.yaw);
+    float pitch_abs_deg = normalizeDeg(cmd.pitch);
     if (frame.mode == static_cast<uint8_t>(common::GimbalCommandMode::Idle)) {
-        yaw_delta_deg = 0.0f;
-        pitch_delta_deg = 0.0f;
+        yaw_abs_deg = normalizeDeg(state.yaw);
+        pitch_abs_deg = normalizeDeg(state.pitch);
     }
 
-    frame.yaw = degToRad(yaw_delta_deg);
-    frame.yaw_vel = degToRad(cmd.yaw_rate);
-    frame.yaw_acc = degToRad(cmd.yaw_acc);
-    frame.pitch = degToRad(pitch_delta_deg);
-    frame.pitch_vel = degToRad(cmd.pitch_rate);
-    frame.pitch_acc = degToRad(cmd.pitch_acc);
+    frame.yaw = yaw_abs_deg;
+    frame.yaw_vel = cmd.yaw_rate;      // deg/s 前馈角速度 (电控速度环叠加)
+    frame.yaw_acc = 0.0f;              // 电控不需要加速度前馈, 置零
+    frame.pitch = pitch_abs_deg;
+    frame.pitch_vel = cmd.pitch_rate;  // deg/s 前馈角速度 (电控速度环叠加)
+    frame.pitch_acc = 0.0f;            // 电控不需要加速度前馈, 置零
 
     std::memcpy(out, &frame, sizeof(frame));
 }

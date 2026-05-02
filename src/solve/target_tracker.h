@@ -165,6 +165,9 @@ private:
     std::vector<std::unique_ptr<Track>> tracks_;       // 所有活跃轨迹
     int next_id_ = 1;                                  // 下一个轨迹ID
     int primary_track_id_ = -1;                        // 当前主目标轨迹ID
+    cv::Point2f last_primary_center_{-1.0f, -1.0f};   // 上一帧主目标位置 (注意力加权)
+    int frame_w_ = 1280;                               // 画面宽度
+    int frame_h_ = 1024;                               // 画面高度
 
     // 关联匹配: 计算代价矩阵并贪心匹配
     void associateDetections(

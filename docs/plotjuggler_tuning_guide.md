@@ -7,46 +7,6 @@
 plotjuggler
 # 或: QT_XCB_GL_INTEGRATION=none /home/zst/Downloads/PlotJuggler-3.17.1-x86_64.AppImage
 
-# 终端2: 启动跟踪程序
-./tests/build/track --color red
-```
-
-PlotJuggler 配置: **Streaming → UDP Server → 端口 9870 → JSON → OK**
-
----
-
-## 信号说明
-
-| 信号名 | 含义 | 单位 | 理想状态 |
-|--------|------|------|----------|
-| `cmd_yaw` | 上位机发给电控的 yaw **指令** | 度(°) | — |
-| `cmd_pitch` | 上位机发给电控的 pitch **指令** | 度(°) | — |
-| `state_yaw` | 电控反馈的 yaw **实际位置** | 度(°) | 紧跟 `cmd_yaw` |
-| `state_pitch` | 电控反馈的 pitch **实际位置** | 度(°) | 紧跟 `cmd_pitch` |
-| `error_yaw` | yaw 误差 = `cmd_yaw − state_yaw` | 度(°) | → 0 |
-| `error_pitch` | pitch 误差 = `cmd_pitch − state_pitch` | 度(°) | → 0 |
-| `target_u` | 目标在图像中的 **水平像素坐标** | px | 趋近 `u_L`(641) |
-| `target_v` | 目标在图像中的 **垂直像素坐标** | px | 趋近 `boresight_v` |
-| `Z_est` | 估算目标距离 = fy × H_物理 / bbox_h | 米(m) | 近小远大 |
-| `dpitch_deg` | 角度域视差补偿量 = atan(0.033/Z) | 度(°) | 近大远小→0 |
-| `bbox_h` | 目标检测框高度（反映目标距离） | px | 近大远小 |
-
-### 推荐观察组合
-
-1. **跟随性能**: 拖 `cmd_pitch` + `state_pitch` 到同一图表
-   - 两条线贴合 = 跟随好; 间距大 = 云台响应慢
-2. **误差收敛**: 拖 `error_yaw` + `error_pitch` 到同一图表
-   - 快速归零 = 调得好; 振荡 = kp 太大; 收不回来 = kp 太小
-3. **视差补偿**: 拖 `dpitch_deg` + `Z_est` + `bbox_h` 到同一图表
-   - 目标靠近时 `dpitch_deg` 增大, `Z_est` 减小
-
----
-
-## 调参方法
-
-所有控制参数在 `src/control/config/control.yaml`，**改完直接重启 track 即可生效，无需重新编译**。
-
-### 1. kp — 比例增益（最重要）
 
 ```yaml
 kp: 3.0   # 当前值
@@ -120,25 +80,31 @@ max_angle_rate: 180.0   # 度/秒
 远距离 → bbox 小 → 补偿小
 ```
 
-在 `tests/track.cpp` 中（修改后需重新编译）:
+在 `tracking` 入口中（修改后需重新编译）:
 
 ```cpp
-constexpr double kLaserOffsetY = 0.020;   // 激光在相机下方的距离(米)
-constexpr double kModuleHeight = 0.050;    // 激光接收模块的物理高度(米)
+// 这两个值来自 config/control.yaml，而不是写死在代码里
+double laser_offset_y = 0.033905;   // 激光在相机下方的距离(米)
+double target_height_m = 0.072;     // 激光接收模块的物理高度(米)
 ```
 
-公式: `dyn_vL = cy + (kLaserOffsetY / kModuleHeight) × bbox_h`
+实际使用位置：`tracking/track.cpp` 里会先用 bbox 高度估距离，再算补偿角：
 
-> `control.yaml` 中的 `v_L: 520.0` 仅为静态备用值，运行时被动态值覆盖。
+```cpp
+Z_est = cam_model.fy * target_height_m / bbox_h;
+dpitch_deg = std::atan(laser_offset_y / Z_est) * kRadToDeg;
+```
+
+> `control.yaml` 中的 `v_L` 只是旧的静态参考值；当前 tracking 入口不再直接依赖这组像素常量。
 
 ### 赛前只需量两个物理尺寸（一次性）
 
 | 参数 | 测量方法 | 当前值 |
 |------|----------|--------|
-| `kLaserOffsetY` | 尺子量：激光发射孔中心 → 相机镜头中心的**垂直距离** | 0.020m (2cm) |
-| `kModuleHeight` | 尺子量：激光接收模块（检测目标）的**实际高度** | 0.050m (5cm) |
+| `laser_offset_y` | 尺子量：激光发射孔中心 → 相机镜头中心的**垂直距离** | 0.033905m |
+| `target_height_m` | 尺子量：激光接收模块（检测目标）的**实际高度** | 0.072m |
 
-量好后写入 track.cpp，编译一次，之后距离远近变化全自动适应。
+量好后写入 `config/control.yaml`，重新启动 `tracking` 即可生效，不需要改源码。
 
 ---
 
@@ -150,5 +116,4 @@ constexpr double kModuleHeight = 0.050;    // 激光接收模块的物理高度(
 4. [ ] 调 `lowpass_alpha`: 在响应速度和稳定性之间取平衡
 5. [ ] 调 `ff_alpha`: 目标运动时观察是否提前预判
 6. [ ] 调 `damping_kd`: 消除到达目标后的振荡
-7. [ ] 验证视差: 拖 `boresight_v` 曲线，靠近/远离时应自动变化
-8. [ ] 用尺子校准 `kLaserOffsetY` 和 `kModuleHeight`
+7. [ ] 验证 `cmd_pitch` / `state_pitch` 收敛情况

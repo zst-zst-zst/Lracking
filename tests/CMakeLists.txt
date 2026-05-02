@@ -65,44 +65,38 @@ add_executable(plane plane.cpp)
 target_include_directories(plane PRIVATE ${TEST_INC})
 target_link_libraries(plane PRIVATE detect galaxy_camera common ${OpenCV_LIBS})
 
-# ── 4. 跟踪照射 ──
-add_executable(track track.cpp)
-target_include_directories(track PRIVATE ${TEST_INC})
-target_link_libraries(track PRIVATE
-  detect solve galaxy_camera gimbal_serial control plotter common ${OpenCV_LIBS})
-
-# ── 6. 偏移推断 ──
+# ── 4. 偏移推断 ──
 add_executable(offset offset.cpp)
 target_include_directories(offset PRIVATE ${TEST_INC})
 target_link_libraries(offset PRIVATE detect solve galaxy_camera common ${OpenCV_LIBS})
 
-# ── 7. 打中测试 ──
+# ── 5. 打中测试 ──
 add_executable(hit hit.cpp)
 target_include_directories(hit PRIVATE ${TEST_INC})
 target_link_libraries(hit PRIVATE
   detect solve galaxy_camera gimbal_serial control common ${OpenCV_LIBS})
 
-# ── 8. 颜色过滤 ──
+# ── 6. 颜色过滤 ──
 add_executable(color color.cpp)
 target_include_directories(color PRIVATE ${TEST_INC})
 target_link_libraries(color PRIVATE galaxy_camera common ${OpenCV_LIBS})
 
-# ── 9. 延迟测量 ──
+# ── 7. 延迟测量 ──
 add_executable(latency latency.cpp)
 target_include_directories(latency PRIVATE ${TEST_INC})
 target_link_libraries(latency PRIVATE detect solve control gimbal_serial galaxy_camera common ${OpenCV_LIBS})
 
-# ── 10. 相机硬件测试 ──
+# ── 8. 相机硬件测试 ──
 add_executable(camera_demo camera_demo.cpp)
 target_include_directories(camera_demo PRIVATE ${TEST_INC})
 target_link_libraries(camera_demo PRIVATE galaxy_camera)
 
-# ── 11. 级联检测可视化 ──
+# ── 9. 级联检测可视化 ──
 add_executable(detect_demo detect_demo.cpp)
 target_include_directories(detect_demo PRIVATE ${TEST_INC} ${TRACKING_SRC})
 target_link_libraries(detect_demo PRIVATE detect solve plotter common ${OpenCV_LIBS})
 
-# ── 13. 控制器测试 ──
+# ── 10. 控制器测试 ──
 add_executable(control_demo control_demo.cpp)
 target_include_directories(control_demo PRIVATE ${TEST_INC})
 target_link_libraries(control_demo PRIVATE control common)

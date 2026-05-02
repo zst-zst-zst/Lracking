@@ -33,7 +33,6 @@ void Controller::resetRuntimeState() {
 // Core control logic for the vision pipeline: pixel error -> gimbal command.
 common::GimbalCommand Controller::update(const common::TargetMeasurement& meas,
                                          const common::CameraModel& cam,
-                                         const common::Boresight& bs,
                                          const common::GimbalState& state) {
     common::GimbalCommand cmd;
     cmd.timestamp = meas.timestamp;
@@ -203,114 +202,77 @@ common::GimbalCommand Controller::update(const common::TargetMeasurement& meas,
             lost_active_ = true;
             lost_start_ts_ = meas.timestamp;
             reacq_count_ = 0;
+            scanning_ = false;
+            scan_phase_ = 0.0;
         }
         double base_pitch = has_last_ ? last_pitch_ : state.pitch;
         double base_yaw = has_last_ ? last_yaw_ : state.yaw;
         double pitch_cmd = base_pitch;
         double yaw_cmd = base_yaw;
 
+        // ── pitch 安全回归: 渐进回到目标常出现的 pitch (或 0) ──
+        // 防止最后一次目标 pitch 是突变值导致极端抬头/低头
+        double target_pitch = cfg_.lost_pitch_home;
+        if (cfg_.lost_pitch_use_ema && has_freq_pitch_) {
+            // 使用目标经常出现的 pitch 位置
+            target_pitch = clamp(freq_pitch_, cfg_.lost_pitch_min, cfg_.lost_pitch_max);
+        }
+        {
+            double pitch_step = cfg_.lost_pitch_return_rate * dt_s;
+            if (pitch_cmd > target_pitch + pitch_step) {
+                pitch_cmd -= pitch_step;
+            } else if (pitch_cmd < target_pitch - pitch_step) {
+                pitch_cmd += pitch_step;
+            } else {
+                pitch_cmd = target_pitch;
+            }
+        }
+        // 绝对限幅: 不允许极端抬头/低头
+        pitch_cmd = clamp(pitch_cmd, cfg_.lost_pitch_min, cfg_.lost_pitch_max);
+
         const double lost_ms = static_cast<double>(meas.timestamp - lost_start_ts_);
-        const bool enter_scan = !cfg_.scan_enable ? false
-            : (cfg_.scan_enter_delay_ms <= 0.0 || lost_ms >= cfg_.scan_enter_delay_ms);
-            if (enter_scan) {
+        const bool enter_search = cfg_.scan_enable &&
+            (cfg_.scan_enter_delay_ms <= 0.0 || lost_ms >= cfg_.scan_enter_delay_ms);
+        if (enter_search) {
             if (!scanning_) {
-                double offset = 0.0;
-                if (has_last_meas_) {
-                    double du = last_uv_.x - bs.u_L;
-                    double dv = last_uv_.y - bs.v_L;
-                    double u = cfg_.yaw_sign * du;
-                    double v = cfg_.pitch_sign * dv;
-                    if (std::abs(u) > 1e-6 || std::abs(v) > 1e-6) {
-                        const std::string pattern = toLower(cfg_.scan_pattern);
-                        if (pattern == "spiral") {
-                            double kx = std::max(1e-3, cfg_.scan_k_yaw);
-                            double ky = std::max(1e-3, cfg_.scan_k_pitch);
-                            u /= kx;
-                            v /= ky;
-                        }
-                        offset = std::atan2(v, u);
-                    }
-                }
-                scan_center_pitch_ = base_pitch;
                 scan_center_yaw_ = base_yaw;
                 scan_phase_ = 0.0;
-                scan_phase_offset_ = offset;
-                scan_dir_ = 1;
                 scanning_ = true;
             }
-            const std::string pattern = toLower(cfg_.scan_pattern);
-            if (pattern == "spiral") {
-                double theta = scan_phase_;
-                const double spacing = std::max(1e-3, cfg_.scan_spacing_deg);
-                const double a = spacing / (2.0 * M_PI);
-                double r = a * theta;
-                const double r_max = std::max(spacing, cfg_.scan_r_max_deg);
-                const double kx = std::max(1e-3, cfg_.scan_k_yaw);
-                const double ky = std::max(1e-3, cfg_.scan_k_pitch);
-                const double psi = theta + scan_phase_offset_;
 
-                if (cfg_.scan_spiral_return) {
-                    if (scan_dir_ > 0 && r >= r_max) {
-                        scan_dir_ = -1;
-                    } else if (scan_dir_ < 0 && theta <= 0.0) {
-                        scan_dir_ = 1;
-                        theta = 0.0;
-                        r = 0.0;
-                    }
-                }
-
-                double dx_dtheta = 0.0;
-                double dy_dtheta = 0.0;
-                if (r < r_max) {
-                    dx_dtheta = kx * (a * std::cos(psi) - r * std::sin(psi));
-                    dy_dtheta = ky * (a * std::sin(psi) + r * std::cos(psi));
-                } else {
-                    r = r_max;
-                    dx_dtheta = -kx * r * std::sin(psi);
-                    dy_dtheta = ky * r * std::cos(psi);
-                }
-                double ds_dtheta = std::sqrt(dx_dtheta * dx_dtheta + dy_dtheta * dy_dtheta);
-                ds_dtheta = std::max(ds_dtheta, kMinScanDs);
-                const double v = std::max(1e-3, cfg_.scan_speed_deg_s);
-                const double step = (v / ds_dtheta) * dt_s;
-                if (cfg_.scan_spiral_return) {
-                    theta += static_cast<double>(scan_dir_) * step;
-                    if (theta < 0.0) {
-                        theta = 0.0;
-                    }
-                } else {
-                    theta += step;
-                }
-
-                if (theta > 1000.0 * M_PI) {
-                    theta = std::fmod(theta, 2.0 * M_PI);
-                }
-                scan_phase_ = theta;
-                r = a * theta;
-                const double r_eval = std::min(r, r_max);
-                pitch_cmd = scan_center_pitch_ + ky * r_eval * std::sin(theta + scan_phase_offset_);
-                yaw_cmd = scan_center_yaw_ + kx * r_eval * std::cos(theta + scan_phase_offset_);
-            } else {
-                scan_phase_ += 2.0 * M_PI * cfg_.scan_rate_hz * dt_s;
-                if (scan_phase_ > 2.0 * M_PI) {
-                    scan_phase_ = std::fmod(scan_phase_, 2.0 * M_PI);
-                }
-                pitch_cmd = scan_center_pitch_ +
-                    cfg_.scan_radius_deg * std::sin(scan_phase_ + scan_phase_offset_);
-                yaw_cmd = scan_center_yaw_ +
-                    cfg_.scan_radius_deg * std::cos(scan_phase_ + scan_phase_offset_);
+            // 丢失时用更小幅度、更慢频率的 yaw 微扫
+            const double search_amp_deg = std::clamp(cfg_.lost_yaw_scan_amp, 0.0, 1.0);
+            const double search_rate_hz = std::max(1e-3, cfg_.lost_yaw_scan_rate);
+            scan_phase_ += 2.0 * M_PI * search_rate_hz * dt_s;
+            if (scan_phase_ > 2.0 * M_PI) {
+                scan_phase_ = std::fmod(scan_phase_, 2.0 * M_PI);
             }
+
+            // 只扫 yaw, pitch 已在上面做了安全回归
+            yaw_cmd = scan_center_yaw_ + search_amp_deg * std::sin(scan_phase_);
         }
 
         double max_step = cfg_.max_angle_rate * dt_s;
-        pitch_cmd = clamp(pitch_cmd, base_pitch - max_step, base_pitch + max_step);
         yaw_cmd = clamp(yaw_cmd, base_yaw - max_step, base_yaw + max_step);
 
         cmd.pitch = static_cast<float>(pitch_cmd);
         cmd.yaw = static_cast<float>(yaw_cmd);
 
-        last_pitch_ = pitch_cmd;
-        last_yaw_ = yaw_cmd;
+        // 指令限幅: 防止绝对值突变
+        if (has_prev_cmd_) {
+            double dy = cmd.yaw - prev_cmd_yaw_;
+            double dp = cmd.pitch - prev_cmd_pitch_;
+            dy = clamp(dy, -cfg_.cmd_max_yaw_step_deg, cfg_.cmd_max_yaw_step_deg);
+            dp = clamp(dp, -cfg_.cmd_max_pitch_step_deg, cfg_.cmd_max_pitch_step_deg);
+            cmd.yaw = static_cast<float>(prev_cmd_yaw_ + dy);
+            cmd.pitch = static_cast<float>(prev_cmd_pitch_ + dp);
+        }
+        prev_cmd_yaw_ = cmd.yaw;
+        prev_cmd_pitch_ = cmd.pitch;
+        has_prev_cmd_ = true;
+
+        last_pitch_ = cmd.pitch;
+        last_yaw_ = cmd.yaw;
         has_last_ = true;
         last_update_ts_ = meas.timestamp;
         has_last_update_ = true;
@@ -324,6 +286,11 @@ common::GimbalCommand Controller::update(const common::TargetMeasurement& meas,
             scanning_ = false;
             lost_active_ = false;
             reacq_count_ = 0;
+            has_last_meas_ = false;
+            last_ff_yaw_rate_ = 0.0;
+            last_ff_pitch_rate_ = 0.0;
+            smooth_vx_ = 0.0;
+            smooth_vy_ = 0.0;
         }
     }
 
@@ -345,9 +312,9 @@ common::GimbalCommand Controller::update(const common::TargetMeasurement& meas,
         compensated_v += smooth_vy_ * delay_s;
     }
 
-    // Pixel error relative to boresight.
-    double du = compensated_u - bs.u_L;
-    double dv = compensated_v - bs.v_L;
+    // Pixel error relative to optical center.
+    double du = compensated_u - cam.cx;
+    double dv = compensated_v - cam.cy;
     const double abs_du = std::abs(du);
     const double abs_dv = std::abs(dv);
     const double deadband_enter = std::max(0.0, cfg_.deadband_px);
@@ -395,9 +362,28 @@ common::GimbalCommand Controller::update(const common::TargetMeasurement& meas,
         }
     }
 
+    // ── 激光同轴补偿 (标定模型: 角度偏差 + 物理视差) ──
+    // 标定模型: 激光落点角度 = boresight_deg (常数) + atan(offset/Z) (距离相关)
+    // 控制器需从目标角度中减去激光偏差，才能让激光对准目标
+    double bs_yaw_deg = cfg_.boresight_yaw_deg;
+    double bs_pitch_deg = cfg_.boresight_pitch_deg;
+    // 物理偏移视差 (距离相关): 通过 bbox 面积估算距离
+    if ((cfg_.laser_offset_x != 0.0 || cfg_.laser_offset_y != 0.0) &&
+        meas.bbox_area > 0.0f && cfg_.target_height_m > 0.01) {
+        double bbox_h = std::sqrt(static_cast<double>(meas.bbox_area));
+        double z_est = cam.fy * cfg_.target_height_m / bbox_h;
+        if (z_est > 0.5 && z_est < 200.0) {
+            bs_yaw_deg += std::atan(cfg_.laser_offset_x / z_est) * kRadToDeg;
+            bs_pitch_deg += std::atan(cfg_.laser_offset_y / z_est) * kRadToDeg;
+        }
+    }
+
     // Position control (absolute angle setpoint).
-    double yaw_cmd = state.yaw + kp * dyaw;
-    double pitch_cmd = state.pitch + kp * dpitch;
+    // dyaw/dpitch = 目标相对相机光轴的角度误差
+    // bs_*_deg = 激光相对相机光轴的角度偏差
+    // 需要补偿: cmd = state + kp * (目标角度 - 激光角度)
+    double yaw_cmd = state.yaw + kp * (dyaw - cfg_.yaw_sign * bs_yaw_deg);
+    double pitch_cmd = state.pitch + kp * (dpitch - cfg_.pitch_sign * bs_pitch_deg);
 
     if (cfg_.use_damping && cfg_.damping_kd > 0.0) {
         double yaw_rate_fb = 0.0;
@@ -427,31 +413,30 @@ common::GimbalCommand Controller::update(const common::TargetMeasurement& meas,
         }
     }
 
-    // Optional feedforward estimate (sent only).
-    if (cfg_.use_velocity_ff && has_last_meas_) {
-        double dt_ms = static_cast<double>(meas.timestamp - last_meas_ts_);
-        if (dt_ms > 0.0 && dt_ms <= cfg_.ff_dt_max_ms) {
-            double dt_s = dt_ms / 1000.0;
-            double u_dot = (meas.uv.x - last_uv_.x) / dt_s;
-            double v_dot = (meas.uv.y - last_uv_.y) / dt_s;
-            double yaw_rate_raw = cfg_.yaw_sign * (u_dot / cam.fx) * kRadToDeg;
-            double pitch_rate_raw = cfg_.pitch_sign * (v_dot / cam.fy) * kRadToDeg;
-            double yaw_rate_ff =
-                cfg_.ff_alpha * yaw_rate_raw + (1.0 - cfg_.ff_alpha) * last_ff_yaw_rate_;
-            double pitch_rate_ff =
-                cfg_.ff_alpha * pitch_rate_raw + (1.0 - cfg_.ff_alpha) * last_ff_pitch_rate_;
-            yaw_rate_ff = clamp(yaw_rate_ff, -cfg_.ff_rate_max, cfg_.ff_rate_max);
-            pitch_rate_ff = clamp(pitch_rate_ff, -cfg_.ff_rate_max, cfg_.ff_rate_max);
+    // ── 速度前馈: 用 Kalman 跟踪器的平滑速度估计 ──
+    // 电控速度环 PID 的 ref = 角度环输出 + 前馈速度(deg/s)
+    // 前馈让电控"提前知道"目标在动, 减少追踪滞后
+    // 注意: 只发速度前馈, 不发加速度前馈 (电控要求)
+    if (cfg_.use_velocity_ff) {
+        // 使用 Kalman 滤波后的速度 (比帧间差分更稳定)
+        double vx_px_s = smooth_vx_;  // 已在延迟补偿中用 EMA 平滑过
+        double vy_px_s = smooth_vy_;
+        // 像素速度 → 角速度 (deg/s)
+        double yaw_rate_raw = cfg_.yaw_sign * (vx_px_s / cam.fx) * kRadToDeg;
+        double pitch_rate_raw = cfg_.pitch_sign * (vy_px_s / cam.fy) * kRadToDeg;
+        // EMA 平滑前馈, 防止突变
+        double yaw_rate_ff =
+            cfg_.ff_alpha * yaw_rate_raw + (1.0 - cfg_.ff_alpha) * last_ff_yaw_rate_;
+        double pitch_rate_ff =
+            cfg_.ff_alpha * pitch_rate_raw + (1.0 - cfg_.ff_alpha) * last_ff_pitch_rate_;
+        yaw_rate_ff = clamp(yaw_rate_ff, -cfg_.ff_rate_max, cfg_.ff_rate_max);
+        pitch_rate_ff = clamp(pitch_rate_ff, -cfg_.ff_rate_max, cfg_.ff_rate_max);
 
-            last_ff_yaw_rate_ = yaw_rate_ff;
-            last_ff_pitch_rate_ = pitch_rate_ff;
+        last_ff_yaw_rate_ = yaw_rate_ff;
+        last_ff_pitch_rate_ = pitch_rate_ff;
 
-            cmd.pitch_rate = static_cast<float>(pitch_rate_ff);
-            cmd.yaw_rate = static_cast<float>(yaw_rate_ff);
-        } else {
-            last_ff_yaw_rate_ = 0.0;
-            last_ff_pitch_rate_ = 0.0;
-        }
+        cmd.pitch_rate = static_cast<float>(pitch_rate_ff);  // deg/s → 电控速度环叠加
+        cmd.yaw_rate = static_cast<float>(yaw_rate_ff);      // deg/s → 电控速度环叠加
     } else {
         last_ff_yaw_rate_ = 0.0;
         last_ff_pitch_rate_ = 0.0;
@@ -471,8 +456,32 @@ common::GimbalCommand Controller::update(const common::TargetMeasurement& meas,
     cmd.pitch = static_cast<float>(pitch_cmd);
     cmd.yaw = static_cast<float>(yaw_cmd);
 
-    last_pitch_ = pitch_cmd;
-    last_yaw_ = yaw_cmd;
+    // ── EMA 记录目标常出现的 pitch 位置 ──
+    if (cfg_.lost_pitch_use_ema) {
+        if (!has_freq_pitch_) {
+            freq_pitch_ = state.pitch;
+            has_freq_pitch_ = true;
+        } else {
+            freq_pitch_ = cfg_.lost_pitch_ema_alpha * state.pitch +
+                          (1.0 - cfg_.lost_pitch_ema_alpha) * freq_pitch_;
+        }
+    }
+
+    // ── 指令限幅: 防止绝对值跳变导致电控突变 ──
+    if (has_prev_cmd_) {
+        double dy = cmd.yaw - prev_cmd_yaw_;
+        double dp = cmd.pitch - prev_cmd_pitch_;
+        dy = clamp(dy, -cfg_.cmd_max_yaw_step_deg, cfg_.cmd_max_yaw_step_deg);
+        dp = clamp(dp, -cfg_.cmd_max_pitch_step_deg, cfg_.cmd_max_pitch_step_deg);
+        cmd.yaw = static_cast<float>(prev_cmd_yaw_ + dy);
+        cmd.pitch = static_cast<float>(prev_cmd_pitch_ + dp);
+    }
+    prev_cmd_yaw_ = cmd.yaw;
+    prev_cmd_pitch_ = cmd.pitch;
+    has_prev_cmd_ = true;
+
+    last_pitch_ = cmd.pitch;
+    last_yaw_ = cmd.yaw;
     has_last_ = true;
     last_uv_ = meas.uv;
     last_meas_ts_ = meas.timestamp;

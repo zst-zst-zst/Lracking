@@ -32,8 +32,7 @@ int main(int argc, char** argv) {
 
     control::ControlConfig ctrl_cfg;
     common::CameraModel cam_model;
-    common::Boresight boresight;
-    if (!control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, &boresight, camera_config)) {
+    if (!control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, nullptr, camera_config)) {
         std::cerr << "Failed to load control config\n";
         return 1;
     }
@@ -50,7 +49,7 @@ int main(int argc, char** argv) {
     state.yaw = state_yaw;
     state.timestamp = meas.timestamp;
 
-    common::GimbalCommand cmd = controller.update(meas, cam_model, boresight, state);
+    common::GimbalCommand cmd = controller.update(meas, cam_model, state);
     std::cout << "CMD pitch=" << cmd.pitch << " yaw=" << cmd.yaw
               << " ts=" << cmd.timestamp << "\n";
     return 0;

@@ -27,7 +27,7 @@ option(DETECT_WITH_ONNX "Build ONNX Runtime detector backend" OFF)
 
 # ── detect library ──
 set(DETECT_SOURCES
-  measurement.cpp
+  # measurement.cpp 已弃用 (未被任何文件引用, toMeasurement 可直接内联)
   cascade_detector.cpp
 )
 if(DETECT_WITH_ONNX)

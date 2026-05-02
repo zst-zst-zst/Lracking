@@ -1,145 +1,68 @@
 # control
 
-**核心控制部分 像素误差 → 云台控制模块**
+`src/control` 负责把视觉测量转成云台角指令，并提供当前主系统入口 `tracking_system`。
 
----
+## 当前组成
 
-## 上下游接口
+- `src/config.cpp`
+- `src/controller.cpp`
+- `include/control/config.h`
+- `include/control/controller.h`
+- `examples/system_demo.cpp`
 
-- 上游：`common::TargetMeasurement` + `common::CameraModel` + `common::Boresight`
-- 云台反馈：`common::GimbalState`（系统内部 `deg/deg/s`，串口线缆侧自动换算为弧度）
-- 输出：`common::GimbalCommand`（pitch/yaw + pitch_rate/yaw_rate + mode）
-- 下游：gimbal_serial（串口收发）
-- 时间戳：`TargetMeasurement.timestamp` 单位为毫秒（ms）
-- 控制周期：使用 `ctrl_dt_*` 估计 update 周期用于限速
-- 角度单位：**deg**，角速度单位：**deg/s**；串口层自动转换到电控协议要求的弧度制
-- 坐标约定：
-  - 图像坐标：u 向右为正，v 向下为正
-  - 云台角度：yaw 左为正右为负；pitch 下为正上为负
-  - 控制符号：`yaw_sign` 作用于 u 轴误差；`pitch_sign` 作用于 v 轴误差
-  - 当前实测：`pitch_sign = -1` 时收敛，以实测为准
+编译结果：
 
-## 构建
+- 静态库 `control`
+- 可执行程序 `tracking_system`
 
-```bash
-mkdir -p build
-cd build
-cmake ..
-make -j$(nproc)
+构建、主程序路径和完整启动命令请见顶层 [README.md](../../README.md)。本页只保留控制模块自己的状态机和参数说明。
+
+## 单点控制验证
+
+单点验证入口在 [tests/README.md](../../tests/README.md) 中统一说明。
+
+## 当前控制逻辑
+
+- 以相机中心为 boresight 参考点，结合激光偏移做补偿
+- 通过 `atan(du / fx)`、`atan(dv / fy)` 把像素误差映射到角度误差
+- 支持死区、滞回、输出低通
+- 支持延迟补偿：利用跟踪器给出的像素速度做前视预测
+- 支持阻尼反馈与角速度前馈
+- 目标丢失时只做 yaw 方向的小幅微扫，pitch 保持最后一次有目标时的位置
+- 启动阶段支持 `startup_*` 预备流程
+- 自适应增益 `adaptive_kp` 可根据 bbox 面积调节 `kp`
+
+## `control.yaml` 里当前最重要的参数
+
+- `kp`
+- `deadband_px`
+- `max_angle_rate`
+- `lowpass_alpha`
+- `yaw_sign`
+- `pitch_sign`
+- `scan_*`
+- `startup_*`
+- `delay_compensate`
+- `system_delay_ms`
+- `adaptive_kp`
+
+## 关于 `laser_offset_x/y`
+
+当前主控制链路已经切到相机中心 + 激光偏移补偿，下面这些旧量只保留给测试程序和历史兼容：
+
+- `laser_offset_x` / `laser_offset_y`
+  - `laser_boresight` 当前会写回这两个字段
+    - 当前主要被 `tracking`、`tests/hit.cpp`、`tests/detect_demo.cpp` 等程序使用
+
+也就是说：
+
+- `laser_boresight` 的当前输出已经不是旧文档里的“直接改 boresight 像素点”
+- `tracking_system` 现在不再依赖 `u_L` / `v_L`，而是走相机中心 + 激光偏移补偿
+
+## 日志
+
+`tracking_system` 通过 `TeeBuf` 同时写终端和日志文件。推荐把日志显式写到：
+
+```text
+logs/tracking_system.log
 ```
-
-## 运行（系统串联）
-
-```bash
-./control_system_demo \
-  --camera-config ../../../config/camera.yaml \
-  --detector-config ../../detector/config/detector.yaml \
-  --control-config ../config/control.yaml \
-  --port /dev/ttyACM0 \
-  --baud 115200 \
-  --send-hz 400
-```
-
-## 云台测试
-
-```bash
-./control_demo --control-config ../config/control.yaml --u 320 --v 240 --pitch 0 --yaw 0
-```
-
-## 配置
-
-`config/control.yaml`：控制参数、相机内参、boresight 像素点。
-
-关键方向参数：
-- `yaw_sign`: yaw 方向符号（+1=右正左负，-1=左正右负）
-- `pitch_sign`: pitch 方向符号（+1=下正上负，-1=上正下负）
-
-## 核心流程
-
-- 像素误差（px）：`du = u - u_L`，`dv = v - v_L`
-- 角度误差（deg）：`dyaw = yaw_sign * atan(du / fx) * 180/pi`，`dpitch = pitch_sign * atan(dv / fy) * 180/pi`
-- 死区与滞回（px）：`deadband_px`，并使用 1px 滞回避免边界抖动
-- 位置式控制（deg）：`yaw_cmd = state.yaw + kp * dyaw`，`pitch_cmd = state.pitch + kp * dpitch`
-- 输出平滑：`lowpass_alpha` 一阶 IIR（历史指令低通）
-- 限速保护：使用 `steady_clock` 估计 `dt`，单次步进受 `max_angle_rate * dt` 约束
-
-## 控制原理
-
-控制器以视觉误差为输入，使用相机内参将像素误差转换为视线角误差，并以比例控制生成云台绝对角度指令。输出侧加入死区和滞回抑制微抖，通过一阶 IIR 低通滤波抑制高频噪声，速度限幅保证指令满足云台动态能力。目标丢失时切换到搜索轨迹，目标恢复后回到跟踪。角速度前馈与阻尼反馈用于提升动态跟随与抑制过冲。
-
-## 角速度前馈
-
-- 开关：`use_velocity_ff`
-- 估计：由像素速度换算角速度（单位 deg/s）
-- 保护：低通 `ff_alpha` + 限幅 `ff_rate_max` + dt 上限 `ff_dt_max_ms`
-- 说明：control 不做前馈注入，仅发送前馈值，由电控决定是否使用
-
-## 速度反馈
-
-- 开关：`use_damping`
-- 来源：`damping_source = meas | gimbal`
-- 作用：对角速度做负反馈，提升跟随速度并抑制过冲
-- 参数：`damping_kd`（秒，乘以 deg/s 形成角度补偿）
-
-## 串口联动
-
-- `control` 输出的是绝对角度命令
-- `gimbal_serial` 下发前会按当前云台反馈转换为相对增量
-- 当前系统主链路把 `mode` 当作链路状态字段使用：
-  - 实际下发固定使用 `mode=1`
-  - `READY/HOLD` 由视觉侧根据回传新鲜度自己判断
-- 断回传时系统不会停止发送；会冻结最后一次有效绝对姿态，继续根据最新识别结果解算绝对命令，并基于这个冻结姿态持续下发相对增量
-- 回传恢复时，控制器会重置瞬态状态并重新同步闭环
-
-## 丢失目标搜索策略
-
-目标丢失时支持两种策略，使用 `scan_pattern` 切换：
-
-- `circle`：平滑画圆搜索（简单、稳定，但是容易出现视野死区）
-- `spiral`：恒路径速度扩张式阿基米德螺线（覆盖效率更高）
-  - 起始方向对准目标丢失前的方向（基于最后一次有效测量）
-
-常用参数（见 `config/control.yaml`）：
-
-- 画圆：`scan_radius_deg`，`scan_rate_hz`
-- 螺线：`scan_spacing_deg`，`scan_speed_deg_s`，`scan_r_max_deg`，`scan_k_yaw`，`scan_k_pitch`
-- 螺线往返：`scan_spiral_return`（到达最大半径后沿原路径回到中心并往复）
-- 搜索抖动抑制：`scan_enter_delay_ms`，`scan_reacq_confirm_frames`
-- 启动策略：`startup_check_frames`（仅当 `startup_prep_ms <= 0` 时生效），`startup_home_pitch`，`startup_home_yaw`
-- 启动准备阶段：`startup_prep_ms`（总时长），`startup_hold_ms`，`startup_home_ms`，`startup_validate_ms`
-- 启动顺序：`startup_validate_first`（先校验再回正）
-- 早退：`startup_allow_early_exit`（校验阶段检测到目标则跳过回正）
-- 回正门控：`startup_require_home` + `startup_home_tol_deg` + `startup_home_max_extra_ms`
-
-建议：
-
-- 想快速找回，先提高 `scan_speed_deg_s`，再根据检测稳定性调整。
-- `scan_k_yaw > scan_k_pitch` 可实现左右宽、上下窄的椭圆搜索。
-
-### 恒速扩张螺线
-
-- 非闭合外扩路径，比画圆更快覆盖新增区域。
-- 相邻圈距恒定，覆盖均匀，恒路径速度避免中心慢、外圈快。
-- `scan_k_yaw/scan_k_pitch` 用于各向异性视场缩放。
-
-### 参数建议
-
-- 圈距：`scan_spacing_deg ≈ 0.8 * min(FOV_eff)`（示例≈9.05°）
-- 速度：检测稳定时 15–18°/s
-- 半径：结合云台限位设置
-
-推荐一组偏快参数（检测稳定时）：
-
-```yaml
-scan_pattern: "spiral"
-scan_spacing_deg: 9.05
-scan_speed_deg_s: 18.0
-scan_r_max_deg: 25.0
-scan_k_yaw: 1.5
-scan_k_pitch: 1.0
-```
-
-丢失抖动明显时：
-
-- `scan_speed_deg_s` 降到 12–15
-- `scan_spacing_deg` 降到 7–8

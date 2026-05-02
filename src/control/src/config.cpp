@@ -158,12 +158,60 @@ bool loadControlConfig(const std::string& path, ControlConfig* cfg,
         if (!fs["startup_allow_early_exit"].empty()) {
             fs["startup_allow_early_exit"] >> cfg->startup_allow_early_exit;
         }
+        // ── 丢失目标安全策略 ──
+        if (!fs["lost_pitch_home"].empty()) {
+            fs["lost_pitch_home"] >> cfg->lost_pitch_home;
+        }
+        if (!fs["lost_pitch_return_rate"].empty()) {
+            fs["lost_pitch_return_rate"] >> cfg->lost_pitch_return_rate;
+        }
+        if (!fs["lost_pitch_max"].empty()) {
+            fs["lost_pitch_max"] >> cfg->lost_pitch_max;
+        }
+        if (!fs["lost_pitch_min"].empty()) {
+            fs["lost_pitch_min"] >> cfg->lost_pitch_min;
+        }
+        if (!fs["lost_yaw_scan_rate"].empty()) {
+            fs["lost_yaw_scan_rate"] >> cfg->lost_yaw_scan_rate;
+        }
+        if (!fs["lost_yaw_scan_amp"].empty()) {
+            fs["lost_yaw_scan_amp"] >> cfg->lost_yaw_scan_amp;
+        }
+        if (!fs["lost_pitch_use_ema"].empty()) {
+            fs["lost_pitch_use_ema"] >> cfg->lost_pitch_use_ema;
+        }
+        if (!fs["lost_pitch_ema_alpha"].empty()) {
+            fs["lost_pitch_ema_alpha"] >> cfg->lost_pitch_ema_alpha;
+        }
+        // ── 指令限幅 ──
+        if (!fs["cmd_max_yaw_step_deg"].empty()) {
+            fs["cmd_max_yaw_step_deg"] >> cfg->cmd_max_yaw_step_deg;
+        }
+        if (!fs["cmd_max_pitch_step_deg"].empty()) {
+            fs["cmd_max_pitch_step_deg"] >> cfg->cmd_max_pitch_step_deg;
+        }
         // ── 延迟补偿 ──
         if (!fs["delay_compensate"].empty()) {
             fs["delay_compensate"] >> cfg->delay_compensate;
         }
         if (!fs["system_delay_ms"].empty()) {
             fs["system_delay_ms"] >> cfg->system_delay_ms;
+        }
+        // ── 激光同轴补偿 ──
+        if (!fs["laser_offset_x"].empty()) {
+            fs["laser_offset_x"] >> cfg->laser_offset_x;
+        }
+        if (!fs["laser_offset_y"].empty()) {
+            fs["laser_offset_y"] >> cfg->laser_offset_y;
+        }
+        if (!fs["target_height_m"].empty()) {
+            fs["target_height_m"] >> cfg->target_height_m;
+        }
+        if (!fs["boresight_yaw_deg"].empty()) {
+            fs["boresight_yaw_deg"] >> cfg->boresight_yaw_deg;
+        }
+        if (!fs["boresight_pitch_deg"].empty()) {
+            fs["boresight_pitch_deg"] >> cfg->boresight_pitch_deg;
         }
         // ── 自适应增益 ──
         if (!fs["adaptive_kp"].empty()) {

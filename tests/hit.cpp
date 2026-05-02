@@ -109,7 +109,6 @@ int main(int argc, char** argv) {
     bool has_gimbal_state = false;
     control::ControlConfig ctrl_cfg;
     common::CameraModel cam_model;
-    common::Boresight boresight;
 
     if (enable_gimbal) {
         if (serial.open(serial_port, serial_baud)) {
@@ -118,7 +117,7 @@ int main(int argc, char** argv) {
             std::cerr << "✗ 串口失败, 云台禁用\n";
             enable_gimbal = false;
         }
-        control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, &boresight, camera_config);
+        control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, nullptr, camera_config);
     }
     control::Controller controller(ctrl_cfg);
 
@@ -206,10 +205,10 @@ int main(int argc, char** argv) {
                         frame.cols, frame.rows);
 
         // ── 命中判定 ──
-        // 使用 boresight 作为激光出射点, 计算目标中心到 boresight 的距离
+        // 使用光心作为激光出射点近似, 计算目标中心到光心的距离
         // 如果距离在目标尺寸的一定范围内, 认为命中
-        cv::Point2f aim_point(static_cast<float>(boresight.u_L),
-                              static_cast<float>(boresight.v_L));
+        cv::Point2f aim_point(static_cast<float>(cam_model.cx),
+                              static_cast<float>(cam_model.cy));
         bool hit_this_frame = false;
         float error_px = 0;
 
@@ -255,7 +254,7 @@ int main(int argc, char** argv) {
                 meas.uv = primary.center;
                 meas.confidence = primary.confidence;
             }
-            auto cmd = controller.update(meas, cam_model, boresight, gimbal_state);
+            auto cmd = controller.update(meas, cam_model, gimbal_state);
             cmd.timestamp = common::nowMs();
             uint8_t tx_frame[gimbal_serial::kTxFrameSize]{};
             if (has_gimbal_state) {

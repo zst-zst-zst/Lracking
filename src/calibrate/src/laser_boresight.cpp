@@ -1953,6 +1953,18 @@ int main(int argc, char** argv) {
             replaceYamlValue(content, "laser_offset_y", last_result.dy);
             replaceYamlValue(content, "laser_offset_x", last_result.dx);
 
+            // 角度偏差直接保存为度 (controller 直接用, 不需要像素中间量)
+            if (content.find("boresight_yaw_deg:") != std::string::npos) {
+                replaceYamlValue(content, "boresight_yaw_deg", last_result.alpha_deg);
+            } else {
+                content += cv::format("\nboresight_yaw_deg: %.6f    # 度, 激光-相机 yaw 角度偏差, 标定自动生成\n", last_result.alpha_deg);
+            }
+            if (content.find("boresight_pitch_deg:") != std::string::npos) {
+                replaceYamlValue(content, "boresight_pitch_deg", last_result.beta_deg);
+            } else {
+                content += cv::format("boresight_pitch_deg: %.6f    # 度, 激光-相机 pitch 角度偏差, 标定自动生成\n", last_result.beta_deg);
+            }
+
             std::ofstream ofs(control_config);
             ofs << content;
             ofs.close();
@@ -1960,7 +1972,9 @@ int main(int argc, char** argv) {
 
             std::cout << "Saved to " << control_config << "\n"
                       << "  laser_offset_x: " << last_result.dx << " m\n"
-                      << "  laser_offset_y: " << last_result.dy << " m\n";
+                      << "  laser_offset_y: " << last_result.dy << " m\n"
+                      << "  boresight_yaw_deg: " << last_result.alpha_deg << " deg\n"
+                      << "  boresight_pitch_deg: " << last_result.beta_deg << " deg\n";
         }
     }
 

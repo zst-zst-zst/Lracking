@@ -426,10 +426,19 @@ std::vector<TargetTracker::TrackedTarget> TargetTracker::update(
                         }),
         tracks_.end());
 
-    // 6. 构建输出并找到主目标
+    // 6. 构建输出并找到主目标 (注意力加权评分)
     std::vector<TrackedTarget> result;
     float best_score = -1.0f;
     primary_track_id_ = -1;
+
+    // 画面中心 (无历史时的默认注意力焦点)
+    const float cx = frame_w_ * 0.5f;
+    const float cy = frame_h_ * 0.5f;
+    // 注意力焦点: 有历史主目标时用上一帧位置, 否则用画面中心
+    const float attn_x = (last_primary_center_.x >= 0) ? last_primary_center_.x : cx;
+    const float attn_y = (last_primary_center_.y >= 0) ? last_primary_center_.y : cy;
+    // 归一化距离基准 (对角线长度)
+    const float diag = std::sqrt(static_cast<float>(frame_w_ * frame_w_ + frame_h_ * frame_h_));
 
     for (const auto& track : tracks_) {
         TrackedTarget tt;
@@ -443,13 +452,38 @@ std::vector<TargetTracker::TrackedTarget> TargetTracker::update(
         tt.state = track->state();
         result.push_back(tt);
 
-        // 主目标: 已确认轨迹中置信度最高的
+        // 主目标评分: 置信度 + 连续命中 + 注意力权重
         if (track->state() == TrackState::CONFIRMED) {
             float score = track->lastConfidence() + track->hitStreak() * 0.01f;
+
+            // ── 注意力加权 ──
+            // (a) 接近上一帧主目标位置 → 加分 (目标连续性)
+            float dx = tt.center.x - attn_x;
+            float dy = tt.center.y - attn_y;
+            float dist_norm = std::sqrt(dx * dx + dy * dy) / diag;  // 0~1
+            float proximity_bonus = 0.3f * (1.0f - dist_norm);      // 最高+0.3
+            score += proximity_bonus;
+
+            // (b) 画面边缘 → 扣分 (边缘检测误差大, 且可能是进出画面的干扰)
+            float edge_x = std::min(tt.center.x, frame_w_ - tt.center.x) / cx;  // 0~1
+            float edge_y = std::min(tt.center.y, frame_h_ - tt.center.y) / cy;  // 0~1
+            float edge_factor = std::min(edge_x, edge_y);  // 0=边缘, 1=中心
+            if (edge_factor < 0.1f) {
+                score -= 0.2f;  // 非常靠近边缘, 扣0.2
+            }
+
             if (score > best_score) {
                 best_score = score;
                 primary_track_id_ = track->id();
             }
+        }
+    }
+
+    // 记录本帧主目标位置 (下一帧的注意力焦点)
+    for (const auto& tt : result) {
+        if (tt.track_id == primary_track_id_) {
+            last_primary_center_ = tt.center;
+            break;
         }
     }
 
