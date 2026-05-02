@@ -79,8 +79,10 @@ public:
     // 获取器
     int id() const { return id_; }                    // 轨迹唯一ID
     TrackState state() const { return state_; }       // 当前状态
-    cv::Rect2f predictedBbox() const;                 // Kalman 预测的 bbox
-    cv::Point2f predictedCenter() const;              // Kalman 预测的中心
+    cv::Rect2f predictedBbox() const;                 // Kalman 预测的 bbox (statePre)
+    cv::Point2f predictedCenter() const;              // Kalman 预测的中心 (statePre)
+    cv::Rect2f estimatedBbox() const;                 // 最佳估计: 已检测用statePost, 仅预测用statePre
+    cv::Point2f estimatedCenter() const;              // 最佳估计: 已检测用statePost, 仅预测用statePre
     cv::Point2f velocity() const;                     // Kalman 估计的速度 (px/frame)
     cv::Point2f velocity_px_s() const;                 // Kalman 估计的速度 (px/s)
     bool diverged() const;                             // NIS 发散检测

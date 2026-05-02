@@ -182,6 +182,24 @@ cv::Point2f Track::velocity() const {
     return cv::Point2f(kf_.statePost.at<float>(2), kf_.statePost.at<float>(3));
 }
 
+cv::Point2f Track::estimatedCenter() const {
+    if (time_since_update_ == 0) {
+        return cv::Point2f(kf_.statePost.at<float>(0), kf_.statePost.at<float>(1));
+    }
+    return cv::Point2f(kf_.statePre.at<float>(0), kf_.statePre.at<float>(1));
+}
+
+cv::Rect2f Track::estimatedBbox() const {
+    if (time_since_update_ == 0) {
+        float cx = kf_.statePost.at<float>(0);
+        float cy = kf_.statePost.at<float>(1);
+        float w = std::max(kf_.statePost.at<float>(4), 1.0f);
+        float h = std::max(kf_.statePost.at<float>(5), 1.0f);
+        return cv::Rect2f(cx - w / 2.0f, cy - h / 2.0f, w, h);
+    }
+    return predictedBbox();
+}
+
 cv::Point2f Track::velocity_px_s() const {
     // Kalman 状态中的速度是 px/frame, 转换为 px/s
     float dt_s = last_dt_ms_ / 1000.0f;
@@ -443,8 +461,8 @@ std::vector<TargetTracker::TrackedTarget> TargetTracker::update(
     for (const auto& track : tracks_) {
         TrackedTarget tt;
         tt.track_id = track->id();
-        tt.bbox = track->predictedBbox();
-        tt.center = track->predictedCenter();
+        tt.bbox = track->estimatedBbox();
+        tt.center = track->estimatedCenter();
         tt.velocity = track->velocity();
         tt.velocity_px_s = track->velocity_px_s();
         tt.confidence = track->lastConfidence();
@@ -499,8 +517,8 @@ TargetTracker::TrackedTarget TargetTracker::primaryTarget() const {
     for (const auto& track : tracks_) {
         if (track->id() == primary_track_id_) {
             tt.track_id = track->id();
-            tt.bbox = track->predictedBbox();
-            tt.center = track->predictedCenter();
+            tt.bbox = track->estimatedBbox();
+            tt.center = track->estimatedCenter();
             tt.velocity = track->velocity();
             tt.velocity_px_s = track->velocity_px_s();
             tt.confidence = track->lastConfidence();

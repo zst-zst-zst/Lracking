@@ -413,14 +413,13 @@ common::GimbalCommand Controller::update(const common::TargetMeasurement& meas,
         }
     }
 
-    // ── 速度前馈: 用 Kalman 跟踪器的平滑速度估计 ──
+    // ── 速度前馈: 用 Kalman 跟踪器的速度估计 ──
     // 电控速度环 PID 的 ref = 角度环输出 + 前馈速度(deg/s)
     // 前馈让电控"提前知道"目标在动, 减少追踪滞后
-    // 注意: 只发速度前馈, 不发加速度前馈 (电控要求)
+    // 注意: 直接用 meas.velocity (Kalman已平滑), 不再经过延迟补偿的 EMA
     if (cfg_.use_velocity_ff) {
-        // 使用 Kalman 滤波后的速度 (比帧间差分更稳定)
-        double vx_px_s = smooth_vx_;  // 已在延迟补偿中用 EMA 平滑过
-        double vy_px_s = smooth_vy_;
+        double vx_px_s = meas.velocity.x;
+        double vy_px_s = meas.velocity.y;
         // 像素速度 → 角速度 (deg/s)
         double yaw_rate_raw = cfg_.yaw_sign * (vx_px_s / cam.fx) * kRadToDeg;
         double pitch_rate_raw = cfg_.pitch_sign * (vy_px_s / cam.fy) * kRadToDeg;

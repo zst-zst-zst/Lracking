@@ -71,7 +71,7 @@ struct ControlConfig {
     double laser_offset_y = 0.0;          // 米, 激光在相机下方的物理偏移 (视差, 距离相关)
     double boresight_yaw_deg = 0.0;       // 度, 激光-相机 yaw 角度偏差 (常数项, 距离无关)
     double boresight_pitch_deg = 0.0;     // 度, 激光-相机 pitch 角度偏差 (常数项, 距离无关)
-    double target_height_m = 0.072;       // 米, 激光检测模块高度
+    double target_height_m = 0.050;       // 米, 激光检测模块高度 (S190 50mm)
     // ── 自适应增益 ──
     bool adaptive_kp = false;             // 远距离自动加大 kp
     double kp_near = 3.0;                 // 近距离 kp (bbox > kp_near_area)

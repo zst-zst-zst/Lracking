@@ -546,14 +546,18 @@ int main(int argc, char** argv) {
     bool has_pending_purple_log = false;
 
     // ── 在线自学习系统 (角度空间) ──
-    // 紫色 = 激光命中, 此时目标中心就是激光实际落点
-    // 系统记住每次命中时的角度偏差, 用 EMA 自动修正 boresight_yaw/pitch_deg
-    // 同时记录到文件, 下次启动时加载历史学习成果
-    const double bs_learn_alpha = 0.03;  // EMA 学习率 (越小越稳, 0.03≈30次收敛)
+    // 紫色 = 命中, 目标中心 = 激光落点
+    // 残差 = 目标角度 - (boresight + 视差) → 非零说明 boresight 有偏
+    // 用积分控制律修正: correction += alpha * residual
+    // baseline + correction = 当前 boresight → 无累积漂移
+    const double bs_learn_alpha = 0.03;  // 积分学习率 (每次命中的修正步长)
     const int bs_learn_min_hits = 3;     // 最少命中次数才开始修正
     int purple_hit_count = 0;
-    double bs_correction_yaw = 0.0;    // 累积修正量 yaw (deg)
-    double bs_correction_pitch = 0.0;  // 累积修正量 pitch (deg)
+    double bs_correction_yaw = 0.0;    // 总修正量 yaw (deg)
+    double bs_correction_pitch = 0.0;  // 总修正量 pitch (deg)
+    // baseline: 标定值 (不变, 学习只改 correction)
+    const double bs_baseline_yaw = ctrl_cfg.boresight_yaw_deg;
+    const double bs_baseline_pitch = ctrl_cfg.boresight_pitch_deg;
     // 加载历史学习成果
     const std::filesystem::path bs_learn_path = "logs/bs_learned.yaml";
     {
@@ -568,8 +572,8 @@ int main(int argc, char** argv) {
                 bs_correction_yaw = ly;
                 bs_correction_pitch = lp;
                 purple_hit_count = lhits;
-                ctrl_cfg.boresight_yaw_deg += ly;
-                ctrl_cfg.boresight_pitch_deg += lp;
+                ctrl_cfg.boresight_yaw_deg = bs_baseline_yaw + ly;
+                ctrl_cfg.boresight_pitch_deg = bs_baseline_pitch + lp;
                 std::cout << "BS_LEARN loaded: hits=" << lhits
                           << " corr_deg=(" << ly << "," << lp << ")"
                           << " bs_deg=(" << ctrl_cfg.boresight_yaw_deg << "," << ctrl_cfg.boresight_pitch_deg << ")\n";
@@ -930,23 +934,38 @@ int main(int argc, char** argv) {
 
             last_primary_color = current_primary_color;
 
-            // ── 在线自学习: 紫色=命中, 记录参数并修正 boresight (角度空间) ──
+            // ── 在线自学习: 紫色=命中, 计算残差并积分修正 boresight ──
             if (current_primary_color == "purple") {
                 purple_hit_count++;
-                // 像素误差 → 角度误差 (deg)
-                double err_u = primary.center.x - cam_model.cx;
-                double err_v = primary.center.y - cam_model.cy;
-                double err_yaw_deg = std::atan(err_u / cam_model.fx) * (180.0 / M_PI);
-                double err_pitch_deg = std::atan(err_v / cam_model.fy) * (180.0 / M_PI);
+                constexpr double kR2D = 180.0 / M_PI;
+                // 目标相对光轴的角度 (deg)
+                double target_yaw_deg = std::atan((primary.center.x - cam_model.cx) / cam_model.fx) * kR2D;
+                double target_pitch_deg = std::atan((primary.center.y - cam_model.cy) / cam_model.fy) * kR2D;
+                // 当前激光补偿量: boresight + 视差
+                double laser_yaw_deg = ctrl_cfg.boresight_yaw_deg;
+                double laser_pitch_deg = ctrl_cfg.boresight_pitch_deg;
+                float bbox_area_learn = primary.bbox.width * primary.bbox.height;
+                if (bbox_area_learn > 0 && ctrl_cfg.target_height_m > 0.01) {
+                    double bh = std::sqrt(static_cast<double>(bbox_area_learn));
+                    double z_est = cam_model.fy * ctrl_cfg.target_height_m / bh;
+                    if (z_est > 0.5 && z_est < 200.0) {
+                        laser_yaw_deg += std::atan(ctrl_cfg.laser_offset_x / z_est) * kR2D;
+                        laser_pitch_deg += std::atan(ctrl_cfg.laser_offset_y / z_est) * kR2D;
+                    }
+                }
+                // 残差: 目标角度 - 激光补偿角度
+                // 正 → boresight 偏小, 需增大; 零 → 完美
+                double residual_yaw = target_yaw_deg - laser_yaw_deg;
+                double residual_pitch = target_pitch_deg - laser_pitch_deg;
 
                 // 记录完整状态到 CSV (供离线分析/训练神经网络)
                 if (learn_log.is_open()) {
                     learn_log << ts << "," << purple_hit_count << ","
                               << primary.center.x << "," << primary.center.y << ","
                               << cam_model.cx << "," << cam_model.cy << ","
-                              << err_yaw_deg << "," << err_pitch_deg << ","
+                              << residual_yaw << "," << residual_pitch << ","
                               << bs_correction_yaw << "," << bs_correction_pitch << ","
-                              << primary.bbox.width * primary.bbox.height << ","
+                              << bbox_area_learn << ","
                               << primary.velocity.x << "," << primary.velocity.y << ","
                               << cmd.yaw << "," << cmd.pitch << ","
                               << gimbal_state.yaw << "," << gimbal_state.pitch << ","
@@ -955,20 +974,20 @@ int main(int argc, char** argv) {
                     learn_log.flush();
                 }
 
-                // EMA 自修正 boresight (角度空间, deg)
+                // 积分修正 boresight: correction += alpha * residual
+                // 绝对赋值 boresight = baseline + correction → 无漂移
                 if (purple_hit_count >= bs_learn_min_hits) {
-                    bs_correction_yaw = bs_learn_alpha * err_yaw_deg + (1.0 - bs_learn_alpha) * bs_correction_yaw;
-                    bs_correction_pitch = bs_learn_alpha * err_pitch_deg + (1.0 - bs_learn_alpha) * bs_correction_pitch;
-                    // 保守地应用修正 (0.1×), 防止过冲
-                    ctrl_cfg.boresight_yaw_deg += bs_correction_yaw * 0.1;
-                    ctrl_cfg.boresight_pitch_deg += bs_correction_pitch * 0.1;
+                    bs_correction_yaw += bs_learn_alpha * residual_yaw;
+                    bs_correction_pitch += bs_learn_alpha * residual_pitch;
+                    ctrl_cfg.boresight_yaw_deg = bs_baseline_yaw + bs_correction_yaw;
+                    ctrl_cfg.boresight_pitch_deg = bs_baseline_pitch + bs_correction_pitch;
                     controller.updateConfig(ctrl_cfg);
                 }
 
                 // 每10次命中打印 + 保存到磁盘 (下次启动自动加载)
                 if (purple_hit_count % 10 == 0) {
                     std::cout << "BS_LEARN hits=" << purple_hit_count
-                              << " err_deg=(" << err_yaw_deg << "," << err_pitch_deg << ")"
+                              << " residual_deg=(" << residual_yaw << "," << residual_pitch << ")"
                               << " corr_deg=(" << bs_correction_yaw << "," << bs_correction_pitch << ")"
                               << " bs_deg=(" << ctrl_cfg.boresight_yaw_deg << "," << ctrl_cfg.boresight_pitch_deg << ")\n";
                     // 持久化到 YAML
