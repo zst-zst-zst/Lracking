@@ -7,7 +7,7 @@
 namespace control {
 
 bool loadControlConfig(const std::string& path, ControlConfig* cfg,
-                       common::CameraModel* cam, common::Boresight* bs,
+                       common::CameraModel* cam,
                        const std::string& camera_config_path) {
     cv::FileStorage fs(path, cv::FileStorage::READ);
     if (!fs.isOpened()) {
@@ -43,6 +43,9 @@ bool loadControlConfig(const std::string& path, ControlConfig* cfg,
         fs["kp"] >> cfg->kp;
         fs["deadband_px"] >> cfg->deadband_px;
         fs["max_angle_rate"] >> cfg->max_angle_rate;
+        if (!fs["max_angle_rate_pitch"].empty()) {
+            fs["max_angle_rate_pitch"] >> cfg->max_angle_rate_pitch;
+        }
         fs["lowpass_alpha"] >> cfg->lowpass_alpha;
         if (!fs["yaw_sign"].empty()) {
             fs["yaw_sign"] >> cfg->yaw_sign;
@@ -213,6 +216,43 @@ bool loadControlConfig(const std::string& path, ControlConfig* cfg,
         if (!fs["boresight_pitch_deg"].empty()) {
             fs["boresight_pitch_deg"] >> cfg->boresight_pitch_deg;
         }
+        // ── 轴独立增益 (精细 yaw 控制) ──
+        if (!fs["kp_yaw"].empty()) {
+            fs["kp_yaw"] >> cfg->kp_yaw;
+        }
+        if (!fs["kp_pitch"].empty()) {
+            fs["kp_pitch"] >> cfg->kp_pitch;
+        }
+        if (!fs["lowpass_alpha_yaw"].empty()) {
+            fs["lowpass_alpha_yaw"] >> cfg->lowpass_alpha_yaw;
+        }
+        if (!fs["lowpass_alpha_pitch"].empty()) {
+            fs["lowpass_alpha_pitch"] >> cfg->lowpass_alpha_pitch;
+        }
+        if (!fs["ki_yaw"].empty()) {
+            fs["ki_yaw"] >> cfg->ki_yaw;
+        }
+        if (!fs["ki_pitch"].empty()) {
+            fs["ki_pitch"] >> cfg->ki_pitch;
+        }
+        if (!fs["ki_max_deg"].empty()) {
+            fs["ki_max_deg"] >> cfg->ki_max_deg;
+        }
+        if (!fs["ff_gain_yaw"].empty()) {
+            fs["ff_gain_yaw"] >> cfg->ff_gain_yaw;
+        }
+        if (!fs["ff_gain_pitch"].empty()) {
+            fs["ff_gain_pitch"] >> cfg->ff_gain_pitch;
+        }
+        if (!fs["ff_alpha_yaw"].empty()) {
+            fs["ff_alpha_yaw"] >> cfg->ff_alpha_yaw;
+        }
+        if (!fs["ff_alpha_pitch"].empty()) {
+            fs["ff_alpha_pitch"] >> cfg->ff_alpha_pitch;
+        }
+        if (!fs["pitch_rate_assist_kp"].empty()) {
+            fs["pitch_rate_assist_kp"] >> cfg->pitch_rate_assist_kp;
+        }
         // ── 自适应增益 ──
         if (!fs["adaptive_kp"].empty()) {
             fs["adaptive_kp"] >> cfg->adaptive_kp;
@@ -236,10 +276,6 @@ bool loadControlConfig(const std::string& path, ControlConfig* cfg,
         fs["fy"] >> cam->fy;
         fs["cx"] >> cam->cx;
         fs["cy"] >> cam->cy;
-    }
-    if (bs) {
-        fs["u_L"] >> bs->u_L;
-        fs["v_L"] >> bs->v_L;
     }
     return true;
 }

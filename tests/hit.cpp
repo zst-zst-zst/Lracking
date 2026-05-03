@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
             std::cerr << "✗ 串口失败, 云台禁用\n";
             enable_gimbal = false;
         }
-        control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, nullptr, camera_config);
+        control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, camera_config);
     }
     control::Controller controller(ctrl_cfg);
 

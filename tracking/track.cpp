@@ -12,7 +12,7 @@
 //                               [--port /dev/ttyUSB0] [--color blue]
 //                               [--video test.mp4]
 //      ./build/track --color blue   # 蓝色敌方
-//      ./build/track --color red    # 红色敌方
+//      ./src/build/tracking/tracking --color red    # 红色敌方
 //      ./build/track --no-gimbal   # 禁用云台控制
 // ============================================================================
 
@@ -300,6 +300,69 @@ struct PurpleTransitionRecord {
     double fps = 0.0;
 };
 
+// ── 控制参数在线学习 ──
+// 训练阶段: 采集每帧跟踪误差, 自动调优 ff_gain
+// 比赛阶段: 加载训练成果, 立即使用最优参数
+//
+// 原理:
+//   FF 增益学习: 误差与速度的相关性
+//     err * vel > 0 → 误差方向 = 运动方向 → FF 不足, 增大 ff_gain
+//     err * vel < 0 → FF 过大, 减小
+//     gradient = sum(err*vel) / sum(vel^2)  (归一化最小二乘)
+//   所有学习结果持久化到 logs/learned_control.yaml, 重启自动加载
+
+struct ControlLearner {
+    // ── 学习结果 (跨会话持久化) ──
+    double ff_gain_yaw = 1.0;
+    double ff_gain_pitch = 1.0;
+    int session_count = 0;
+    int lifetime_tracking_frames = 0;
+    int lifetime_hit_frames = 0;
+    double ema_hit_ratio = 0.0;
+
+    // ── 在线 EMA 状态 (每帧更新, 不攒批次) ──
+    double ema_err_yaw = 0.0;          // EMA 跟踪的 yaw 绝对误差 (deg)
+    double ema_err_pitch = 0.0;        // EMA 跟踪的 pitch 绝对误差 (deg)
+    double ema_osc_yaw = 0.0;          // EMA 跟踪的 yaw 振荡率 (0~1)
+    double ema_osc_pitch = 0.0;        // EMA 跟踪的 pitch 振荡率 (0~1)
+    double ema_ff_grad_yaw = 0.0;      // EMA 跟踪的 yaw FF 梯度
+    double ema_ff_grad_pitch = 0.0;    // EMA 跟踪的 pitch FF 梯度
+    double last_err_yaw = 0.0, last_err_pitch = 0.0;
+    int session_tracking_frames = 0;
+    int session_hit_frames = 0;
+
+    // EMA 常数
+    static constexpr double kEmaFast = 0.08;   // 快速 EMA (误差/振荡)
+    static constexpr double kEmaSlow = 0.02;    // 慢速 EMA (梯度)
+
+    bool load(const std::string& path) {
+        cv::FileStorage fs(path, cv::FileStorage::READ);
+        if (!fs.isOpened()) return false;
+        if (!fs["ff_gain_yaw"].empty()) fs["ff_gain_yaw"] >> ff_gain_yaw;
+        if (!fs["ff_gain_pitch"].empty()) fs["ff_gain_pitch"] >> ff_gain_pitch;
+        if (!fs["session_count"].empty()) fs["session_count"] >> session_count;
+        if (!fs["lifetime_tracking_frames"].empty()) fs["lifetime_tracking_frames"] >> lifetime_tracking_frames;
+        if (!fs["lifetime_hit_frames"].empty()) fs["lifetime_hit_frames"] >> lifetime_hit_frames;
+        if (!fs["ema_hit_ratio"].empty()) fs["ema_hit_ratio"] >> ema_hit_ratio;
+        fs.release();
+        return true;
+    }
+
+    void save(const std::string& path) const {
+        namespace fs = std::filesystem;
+        fs::create_directories(fs::path(path).parent_path());
+        cv::FileStorage out(path, cv::FileStorage::WRITE);
+        if (!out.isOpened()) return;
+        out << "ff_gain_yaw" << ff_gain_yaw;
+        out << "ff_gain_pitch" << ff_gain_pitch;
+        out << "session_count" << session_count;
+        out << "lifetime_tracking_frames" << lifetime_tracking_frames;
+        out << "lifetime_hit_frames" << lifetime_hit_frames;
+        out << "ema_hit_ratio" << ema_hit_ratio;
+        out.release();
+    }
+};
+
 // ── 亚像素精化: 对检测框中心做亚像素修正 ──
 // 目标特征: 上下发光灯带, 中间约3cm不发光
 // 策略: 用二值化 mask 的几何矩(非强度加权)找质心
@@ -469,6 +532,7 @@ int main(int argc, char** argv) {
     gimbal_serial::FrameParser parser;
     gimbal_serial::GimbalState gimbal_state;
     bool has_gimbal_state = false;
+    bool gimbal_state_stale = false;  // state 数据过期 (长时间未成功解析)
     control::ControlConfig ctrl_cfg;
     common::CameraModel cam_model;
 
@@ -479,7 +543,7 @@ int main(int argc, char** argv) {
             std::cerr << "✗ 串口打开失败, 云台控制已禁用\n";
             enable_gimbal = false;
         }
-        control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, nullptr, camera_config);
+        control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, camera_config);
     }
     control::Controller controller(ctrl_cfg);
     tools::Plotter plotter;  // UDP JSON → PlotJuggler (127.0.0.1:9870)
@@ -550,7 +614,12 @@ int main(int argc, char** argv) {
     // 残差 = 目标角度 - (boresight + 视差) → 非零说明 boresight 有偏
     // 用积分控制律修正: correction += alpha * residual
     // baseline + correction = 当前 boresight → 无累积漂移
-    const double bs_learn_alpha = 0.03;  // 积分学习率 (每次命中的修正步长)
+    // 自适应学习率: 偏差大时快速收敛, 偏差小时精细微调
+    // |correction| > 0.3° → alpha=0.15 (大步快走)
+    // |correction| < 0.05° → alpha=0.03 (精细调)
+    constexpr double kBsAlphaMax = 0.15;
+    constexpr double kBsAlphaMin = 0.03;
+    constexpr double kBsAlphaDecay = 5.0;  // 衰减系数
     const int bs_learn_min_hits = 3;     // 最少命中次数才开始修正
     int purple_hit_count = 0;
     double bs_correction_yaw = 0.0;    // 总修正量 yaw (deg)
@@ -574,6 +643,7 @@ int main(int argc, char** argv) {
                 purple_hit_count = lhits;
                 ctrl_cfg.boresight_yaw_deg = bs_baseline_yaw + ly;
                 ctrl_cfg.boresight_pitch_deg = bs_baseline_pitch + lp;
+                controller.updateConfig(ctrl_cfg);  // 关键: 把学习成果应用到控制器!
                 std::cout << "BS_LEARN loaded: hits=" << lhits
                           << " corr_deg=(" << ly << "," << lp << ")"
                           << " bs_deg=(" << ctrl_cfg.boresight_yaw_deg << "," << ctrl_cfg.boresight_pitch_deg << ")\n";
@@ -581,6 +651,37 @@ int main(int argc, char** argv) {
             lfs.release();
         }
     }
+    // 确认激光补偿参数已加载
+    std::cout << "CTRL_CONFIG: kp=" << ctrl_cfg.kp
+              << " kp_yaw=" << ctrl_cfg.kp_yaw
+              << " laser_offset_y=" << ctrl_cfg.laser_offset_y
+              << " laser_offset_x=" << ctrl_cfg.laser_offset_x
+              << " bs_yaw=" << ctrl_cfg.boresight_yaw_deg
+              << " bs_pitch=" << ctrl_cfg.boresight_pitch_deg
+              << " target_h=" << ctrl_cfg.target_height_m << "\n";
+
+    // ── 控制参数自学习: 加载历史训练成果 ──
+    const std::filesystem::path ctrl_learn_path = "logs/learned_control.yaml";
+    ControlLearner ctrl_learn;
+    const double base_ff_gain_yaw = ctrl_cfg.ff_gain_yaw;
+    const double base_ff_gain_pitch = ctrl_cfg.ff_gain_pitch;
+    {
+        if (ctrl_learn.load(ctrl_learn_path.string())) {
+            ctrl_learn.session_count++;
+            ctrl_cfg.ff_gain_yaw = ctrl_learn.ff_gain_yaw;
+            ctrl_cfg.ff_gain_pitch = ctrl_learn.ff_gain_pitch;
+            controller.updateConfig(ctrl_cfg);
+            std::cout << "CTRL_LEARN loaded: session=" << ctrl_learn.session_count
+                      << " ff_yaw=" << ctrl_learn.ff_gain_yaw
+                      << " ff_pitch=" << ctrl_learn.ff_gain_pitch
+                      << " hit_ratio=" << ctrl_learn.ema_hit_ratio << "\n";
+        } else {
+            ctrl_learn.session_count = 1;
+            ctrl_learn.ff_gain_yaw = base_ff_gain_yaw;
+            ctrl_learn.ff_gain_pitch = base_ff_gain_pitch;
+        }
+    }
+
     // 参数学习记录 (记录每次命中时的全部状态, 供离线分析/训练神经网络)
     const std::filesystem::path learn_log_path = "logs/learning_samples.csv";
     const bool learn_log_new = !std::filesystem::exists(learn_log_path) ||
@@ -629,15 +730,44 @@ int main(int argc, char** argv) {
 
         // ── 串口接收 ──
         if (enable_gimbal) {
+            int64_t t_rx_start = common::nowMs();
             int n = serial.read(rx_buf.data(), static_cast<int>(rx_buf.size()), 5);
+            int64_t t_rx_end = common::nowMs();
             static int serial_frame_cnt = 0;
             serial_frame_cnt++;
+            static int64_t last_parsed_ts = 0;  // 上次成功解析的时间
             bool parsed = false;
             if (n > 0) {
-                parsed = parser.push(rx_buf.data(), static_cast<size_t>(n), &gimbal_state);
+                common::GimbalState new_state;
+                parsed = parser.push(rx_buf.data(), static_cast<size_t>(n), &new_state);
                 if (parsed) {
-                    has_gimbal_state = true;
+                    // 健全性检查: 拒绝物理上不可能的跳变 (>15°/帧 ≈ 450°/s)
+                    // 串口数据损坏会导致 state 随机跳变, 直接用则控制发散
+                    bool state_ok = true;
+                    if (has_gimbal_state) {
+                        double djump_yaw = std::abs(new_state.yaw - gimbal_state.yaw);
+                        double djump_pitch = std::abs(new_state.pitch - gimbal_state.pitch);
+                        if (djump_yaw > 15.0 || djump_pitch > 15.0) {
+                            state_ok = false;
+                            if (serial_frame_cnt % 30 == 0) {
+                                std::cout << "WARN gimbal state jump rejected:"
+                                          << " yaw " << gimbal_state.yaw << "->" << new_state.yaw
+                                          << " pitch " << gimbal_state.pitch << "->" << new_state.pitch << "\n";
+                            }
+                        }
+                    }
+                    if (state_ok) {
+                        gimbal_state = new_state;
+                        has_gimbal_state = true;
+                        last_parsed_ts = t_rx_end;
+                        gimbal_state_stale = false;
+                    }
                 }
+            }
+            // 检测 state 过期: 超过 500ms 没有成功解析 → state 不可信
+            if (has_gimbal_state && last_parsed_ts > 0 &&
+                (t_rx_end - last_parsed_ts) > 500) {
+                gimbal_state_stale = true;
             }
             // 前100帧每帧打印, 之后每30帧打印
             if (serial_frame_cnt <= 100 || serial_frame_cnt % 30 == 0) {
@@ -646,10 +776,21 @@ int main(int argc, char** argv) {
                           << " parsed=" << parsed
                           << " has_state=" << has_gimbal_state
                           << " bad=" << pst.bad_frames
-                          << " discard=" << pst.discarded_bytes;
+                          << " discard=" << pst.discarded_bytes
+                          << " rx_ms=" << (t_rx_end - t_rx_start);
                 if (has_gimbal_state) {
                     std::cout << " yaw=" << gimbal_state.yaw
                               << " pitch=" << gimbal_state.pitch;
+                }
+                if (gimbal_state_stale) std::cout << " STALE!";
+                // 前10帧: hex dump 帮助诊断协议不匹配
+                if (serial_frame_cnt <= 10 && n > 0) {
+                    std::cout << " hex[" << std::min(n, 20) << "]=";
+                    for (int i = 0; i < std::min(n, 20); ++i) {
+                        char buf[4]; snprintf(buf, sizeof(buf), "%02X", rx_buf[i]);
+                        std::cout << buf;
+                        if (i < std::min(n, 20) - 1) std::cout << " ";
+                    }
                 }
                 std::cout << "\n";
             }
@@ -861,6 +1002,17 @@ int main(int argc, char** argv) {
                       << " has_gimbal_state=" << has_gimbal_state << "\n";
         }
 
+        // 如果 gimbal state 过期 (串口解析持续失败), 用上次指令位置代替
+        // 避免用冻结的 state 做闭环导致开环振荡
+        static float dead_reckon_yaw = 0.0f, dead_reckon_pitch = 0.0f;
+        common::GimbalState ctrl_state = gimbal_state;
+        if (gimbal_state_stale || !has_gimbal_state) {
+            ctrl_state.yaw = dead_reckon_yaw;
+            ctrl_state.pitch = dead_reckon_pitch;
+            ctrl_state.yaw_rate = 0.0f;
+            ctrl_state.pitch_rate = 0.0f;
+        }
+
         if (enable_gimbal && has_target) {
             auto primary = tracker.primaryTarget();
             common::TargetMeasurement meas;
@@ -869,9 +1021,10 @@ int main(int argc, char** argv) {
             meas.uv = primary.center;
             meas.confidence = primary.confidence;
             meas.bbox_area = primary.bbox.width * primary.bbox.height;
+            meas.bbox_height = primary.bbox.height;
             meas.velocity = primary.velocity_px_s;
 
-            auto cmd = controller.update(meas, cam_model, gimbal_state);
+            auto cmd = controller.update(meas, cam_model, ctrl_state);
             cmd.timestamp = common::nowMs();
 
             const DetColorInfo* best_color_info = nullptr;
@@ -934,8 +1087,98 @@ int main(int argc, char** argv) {
 
             last_primary_color = current_primary_color;
 
+            // ── 控制参数在线学习: 每帧采集跟踪误差信号 ──
+            // state 过期时暂停学习, 防止开环误差把参数推到极值
+            if (!gimbal_state_stale && has_gimbal_state) {
+                constexpr double kR2D_cl = 180.0 / M_PI;
+                double err_yaw_cl = std::atan((primary.center.x - cam_model.cx) / cam_model.fx) * kR2D_cl;
+                double err_pitch_cl = std::atan((primary.center.y - cam_model.cy) / cam_model.fy) * kR2D_cl;
+                // 减去 boresight+视差 得到残差 (理想=0)
+                double comp_yaw_cl = ctrl_cfg.boresight_yaw_deg;
+                double comp_pitch_cl = ctrl_cfg.boresight_pitch_deg;
+                float ba_cl = primary.bbox.width * primary.bbox.height;
+                if (ba_cl > 0 && ctrl_cfg.target_height_m > 0.01) {
+                    double bh_cl = std::sqrt(static_cast<double>(ba_cl));
+                    double z_cl = cam_model.fy * ctrl_cfg.target_height_m / bh_cl;
+                    if (z_cl > 0.5 && z_cl < 200.0) {
+                        comp_yaw_cl += std::atan(ctrl_cfg.laser_offset_x / z_cl) * kR2D_cl;
+                        comp_pitch_cl += std::atan(ctrl_cfg.laser_offset_y / z_cl) * kR2D_cl;
+                    }
+                }
+                err_yaw_cl -= comp_yaw_cl;
+                err_pitch_cl -= comp_pitch_cl;
+                double vel_yaw_cl = ctrl_cfg.yaw_sign * (primary.velocity_px_s.x / cam_model.fx) * kR2D_cl;
+                double vel_pitch_cl = ctrl_cfg.pitch_sign * (primary.velocity_px_s.y / cam_model.fy) * kR2D_cl;
+
+                ctrl_learn.session_tracking_frames++;
+                if (current_primary_color == "purple") ctrl_learn.session_hit_frames++;
+
+                // ── 在线 EMA 自适应学习: 每帧更新 ──
+                const double aF = ControlLearner::kEmaFast;
+                const double aS = ControlLearner::kEmaSlow;
+
+                // 1) EMA 更新误差
+                ctrl_learn.ema_err_yaw = aF * std::abs(err_yaw_cl) + (1.0 - aF) * ctrl_learn.ema_err_yaw;
+                ctrl_learn.ema_err_pitch = aF * std::abs(err_pitch_cl) + (1.0 - aF) * ctrl_learn.ema_err_pitch;
+
+                // 2) EMA 更新振荡率 (误差符号翻转 → 1, 否则 → 0)
+                double osc_yaw_sample = (ctrl_learn.last_err_yaw * err_yaw_cl < 0) ? 1.0 : 0.0;
+                double osc_pitch_sample = (ctrl_learn.last_err_pitch * err_pitch_cl < 0) ? 1.0 : 0.0;
+                ctrl_learn.ema_osc_yaw = aF * osc_yaw_sample + (1.0 - aF) * ctrl_learn.ema_osc_yaw;
+                ctrl_learn.ema_osc_pitch = aF * osc_pitch_sample + (1.0 - aF) * ctrl_learn.ema_osc_pitch;
+                ctrl_learn.last_err_yaw = err_yaw_cl;
+                ctrl_learn.last_err_pitch = err_pitch_cl;
+
+                // 3) EMA 更新 FF 梯度 (err*vel 相关性, 仅目标在动时)
+                if (std::abs(vel_yaw_cl) > 0.5) {
+                    double grad_y = err_yaw_cl * vel_yaw_cl / (vel_yaw_cl * vel_yaw_cl + 1e-6);
+                    ctrl_learn.ema_ff_grad_yaw = aS * grad_y + (1.0 - aS) * ctrl_learn.ema_ff_grad_yaw;
+                }
+                if (std::abs(vel_pitch_cl) > 0.5) {
+                    double grad_p = err_pitch_cl * vel_pitch_cl / (vel_pitch_cl * vel_pitch_cl + 1e-6);
+                    ctrl_learn.ema_ff_grad_pitch = aS * grad_p + (1.0 - aS) * ctrl_learn.ema_ff_grad_pitch;
+                }
+
+                // 4) 每 30 帧 (~1秒) 应用 FF 增益调整
+                if (ctrl_learn.session_tracking_frames >= 60 &&
+                    ctrl_learn.session_tracking_frames % 30 == 0) {
+                    // FF yaw: 梯度方向调整, 步长和梯度成正比
+                    double ff_step_y = 0.01 * std::tanh(ctrl_learn.ema_ff_grad_yaw * 5.0);
+                    ctrl_learn.ff_gain_yaw = std::clamp(ctrl_learn.ff_gain_yaw + ff_step_y, 0.5, 2.5);
+
+                    // FF pitch
+                    double ff_step_p = 0.01 * std::tanh(ctrl_learn.ema_ff_grad_pitch * 5.0);
+                    ctrl_learn.ff_gain_pitch = std::clamp(ctrl_learn.ff_gain_pitch + ff_step_p, 0.5, 2.5);
+
+                    // 应用 FF 学习结果
+                    ctrl_cfg.ff_gain_yaw = ctrl_learn.ff_gain_yaw;
+                    ctrl_cfg.ff_gain_pitch = ctrl_learn.ff_gain_pitch;
+                    controller.updateConfig(ctrl_cfg);
+
+                    // 定期打印
+                    if (ctrl_learn.session_tracking_frames % 450 == 0) {
+                        double hr = ctrl_learn.session_tracking_frames > 0 ?
+                            static_cast<double>(ctrl_learn.session_hit_frames) / ctrl_learn.session_tracking_frames : 0;
+                        std::cout << "CTRL_LEARN track=" << ctrl_learn.session_tracking_frames
+                                  << " hits=" << ctrl_learn.session_hit_frames
+                                  << " ratio=" << cv::format("%.2f", hr)
+                                  << " ff_yaw=" << cv::format("%.3f", ctrl_learn.ff_gain_yaw)
+                                  << " ff_pitch=" << cv::format("%.3f", ctrl_learn.ff_gain_pitch)
+                                  << " osc_y=" << cv::format("%.2f", ctrl_learn.ema_osc_yaw)
+                                  << " osc_p=" << cv::format("%.2f", ctrl_learn.ema_osc_pitch)
+                                  << " err_y=" << cv::format("%.3f", ctrl_learn.ema_err_yaw)
+                                  << " err_p=" << cv::format("%.3f", ctrl_learn.ema_err_pitch) << "\n";
+                    }
+                }
+            }
+
             // ── 在线自学习: 紫色=命中, 计算残差并积分修正 boresight ──
-            if (current_primary_color == "purple") {
+            // 门控策略:
+            //   1. 需要足够跟踪帧数热身 (EMA 冷启动时=0, 会假稳定)
+            //   2. 紫色=激光已命中, 只检查振荡 (不需要误差小, 误差小了才能紫色)
+            bool ema_warmed = ctrl_learn.session_tracking_frames >= 30;
+            bool not_oscillating = (ctrl_learn.ema_osc_yaw < 0.25 && ctrl_learn.ema_osc_pitch < 0.25);
+            if (current_primary_color == "purple" && ema_warmed && not_oscillating) {
                 purple_hit_count++;
                 constexpr double kR2D = 180.0 / M_PI;
                 // 目标相对光轴的角度 (deg)
@@ -976,16 +1219,20 @@ int main(int argc, char** argv) {
 
                 // 积分修正 boresight: correction += alpha * residual
                 // 绝对赋值 boresight = baseline + correction → 无漂移
+                // 自适应学习率: 偏差大→大步, 偏差小→精调
                 if (purple_hit_count >= bs_learn_min_hits) {
-                    bs_correction_yaw += bs_learn_alpha * residual_yaw;
-                    bs_correction_pitch += bs_learn_alpha * residual_pitch;
+                    double corr_mag = std::max(std::abs(residual_yaw), std::abs(residual_pitch));
+                    double bs_alpha = kBsAlphaMin + (kBsAlphaMax - kBsAlphaMin) *
+                                      (1.0 - std::exp(-kBsAlphaDecay * corr_mag));
+                    bs_correction_yaw += bs_alpha * residual_yaw;
+                    bs_correction_pitch += bs_alpha * residual_pitch;
                     ctrl_cfg.boresight_yaw_deg = bs_baseline_yaw + bs_correction_yaw;
                     ctrl_cfg.boresight_pitch_deg = bs_baseline_pitch + bs_correction_pitch;
                     controller.updateConfig(ctrl_cfg);
                 }
 
-                // 每10次命中打印 + 保存到磁盘 (下次启动自动加载)
-                if (purple_hit_count % 10 == 0) {
+                // 每3次命中打印 + 保存到磁盘 (下次启动自动加载)
+                if (purple_hit_count % 3 == 0) {
                     std::cout << "BS_LEARN hits=" << purple_hit_count
                               << " residual_deg=(" << residual_yaw << "," << residual_pitch << ")"
                               << " corr_deg=(" << bs_correction_yaw << "," << bs_correction_pitch << ")"
@@ -1005,8 +1252,11 @@ int main(int argc, char** argv) {
             // 调试输出
             static int debug_count = 0;
             if (++debug_count % 30 == 0) {
+                int64_t pipeline_delay_ms = cmd.timestamp - ts;
                 std::cout << "DBG gimbal cmd: mode=" << static_cast<int>(cmd.mode)
                           << " yaw=" << cmd.yaw << " pitch=" << cmd.pitch
+                          << " p_rate=" << cmd.pitch_rate
+                          << " delay=" << pipeline_delay_ms << "ms"
                           << " uv=(" << primary.center.x << "," << primary.center.y << ")"
                           << " bbox_h=" << primary.bbox.height << "\n";
             }
@@ -1026,30 +1276,54 @@ int main(int argc, char** argv) {
                 plotter.plot(j);
             }
 
+            // 更新 dead reckoning 位置
+            // 仅在云台状态新鲜时更新 (防止 stale 下指令无限累积)
+            // stale 时云台没在动, state 不应跟随 cmd
+            if (!gimbal_state_stale && has_gimbal_state) {
+                dead_reckon_yaw = cmd.yaw;
+                dead_reckon_pitch = cmd.pitch;
+            }
+
             uint8_t tx_frame[gimbal_serial::kTxFrameSize]{};
             if (has_gimbal_state) {
                 gimbal_serial::packGimbalCommand(cmd, gimbal_state, tx_frame);
             } else {
                 gimbal_serial::packGimbalCommand(cmd, tx_frame);
             }
+            int64_t t_write_start = common::nowMs();
             int written = serial.write(tx_frame, static_cast<int>(sizeof(tx_frame)));
+            int64_t t_write_end = common::nowMs();
 
-            // 调试：显示串口写入
+            // 调试：显示串口写入 + 串口通信耗时
             static int serial_debug_count = 0;
+            static int64_t serial_write_sum = 0;
+            static int serial_write_count = 0;
+            serial_write_sum += (t_write_end - t_write_start);
+            serial_write_count++;
             if (++serial_debug_count % 30 == 0) {
-                std::cout << "DBG serial wrote=" << written << " bytes\n";
+                double avg_write_ms = (serial_write_count > 0)
+                    ? static_cast<double>(serial_write_sum) / serial_write_count : 0;
+                std::cout << "DBG serial wrote=" << written << " bytes"
+                          << " tx_ms=" << (t_write_end - t_write_start)
+                          << " avg_tx=" << cv::format("%.1f", avg_write_ms) << "ms\n";
+                serial_write_sum = 0;
+                serial_write_count = 0;
             }
 
             // 瞄准十字丝 (黄色)
             cv::drawMarker(frame, cv::Point(primary.center.x, primary.center.y),
                            cv::Scalar(0, 255, 255), cv::MARKER_TILTED_CROSS, 30, 3, cv::LINE_AA);
         } else if (enable_gimbal) {
-            // 无目标: 发送 idle
+            // 发送 idle
             common::TargetMeasurement meas;
             meas.valid = false;
             meas.timestamp = ts;
-            auto cmd = controller.update(meas, cam_model, gimbal_state);
+            auto cmd = controller.update(meas, cam_model, ctrl_state);
             cmd.timestamp = common::nowMs();
+            if (!gimbal_state_stale && has_gimbal_state) {
+                dead_reckon_yaw = cmd.yaw;
+                dead_reckon_pitch = cmd.pitch;
+            }
             uint8_t tx_frame[gimbal_serial::kTxFrameSize]{};
             gimbal_serial::packGimbalCommand(cmd, tx_frame);
             serial.write(tx_frame, static_cast<int>(sizeof(tx_frame)));
@@ -1130,6 +1404,32 @@ int main(int argc, char** argv) {
     if (enable_gimbal) serial.close();
     if (use_galaxy) { galaxy.stopGrabbing(); galaxy.close(); }
     tracker.saveTrajectoryLog();
+    // 退出时保存自学习成果 (防止 Ctrl+C 丢失)
+    if (purple_hit_count >= bs_learn_min_hits) {
+        std::filesystem::create_directories(bs_learn_path.parent_path());
+        cv::FileStorage sfs(bs_learn_path.string(), cv::FileStorage::WRITE);
+        if (sfs.isOpened()) {
+            sfs << "correction_yaw_deg" << bs_correction_yaw;
+            sfs << "correction_pitch_deg" << bs_correction_pitch;
+            sfs << "total_hits" << purple_hit_count;
+            sfs.release();
+            std::cout << "BS_LEARN saved on exit: hits=" << purple_hit_count
+                      << " corr_deg=(" << bs_correction_yaw << "," << bs_correction_pitch << ")\n";
+        }
+    }
+    // 退出时保存控制参数学习成果
+    ctrl_learn.lifetime_tracking_frames += ctrl_learn.session_tracking_frames;
+    ctrl_learn.lifetime_hit_frames += ctrl_learn.session_hit_frames;
+    if (ctrl_learn.session_tracking_frames > 100) {
+        double session_hr = static_cast<double>(ctrl_learn.session_hit_frames) / ctrl_learn.session_tracking_frames;
+        ctrl_learn.ema_hit_ratio = 0.2 * session_hr + 0.8 * ctrl_learn.ema_hit_ratio;
+    }
+    ctrl_learn.save(ctrl_learn_path.string());
+    std::cout << "CTRL_LEARN saved: sessions=" << ctrl_learn.session_count
+              << " ff_yaw=" << ctrl_learn.ff_gain_yaw
+              << " ff_pitch=" << ctrl_learn.ff_gain_pitch
+              << " hit_ratio=" << ctrl_learn.ema_hit_ratio << "\n";
+
     cv::destroyAllWindows();
     std::cout << "=== 测试结束 ===\n";
     return 0;

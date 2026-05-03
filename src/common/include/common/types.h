@@ -29,7 +29,8 @@ struct TargetMeasurement {
     float confidence = 0.0f;
     int class_id = -1;
     std::string label;
-    float bbox_area = 0.0f;      // bbox 面积 (px²), 用于距离估算/自适应增益
+    float bbox_area = 0.0f;      // bbox 面积 (px²), 用于自适应增益
+    float bbox_height = 0.0f;    // bbox 高度 (px), 用于距离估算 Z = fy*H/h
     cv::Point2f velocity{};      // 跟踪器估计的速度 (px/s), 用于延迟补偿
 };
 
@@ -61,11 +62,6 @@ struct CameraModel {
     double fy = 0.0;
     double cx = 0.0;
     double cy = 0.0;
-};
-
-struct Boresight {
-    double u_L = 0.0;
-    double v_L = 0.0;
 };
 
 }  // namespace common

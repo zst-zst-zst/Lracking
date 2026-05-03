@@ -9,7 +9,7 @@
 namespace control {
 
 bool loadControlConfig(const std::string& path, ControlConfig* cfg,
-                       common::CameraModel* cam, common::Boresight* bs,
+                       common::CameraModel* cam,
                        const std::string& camera_config_path = "");
 
 }  // namespace control

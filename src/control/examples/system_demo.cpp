@@ -286,14 +286,11 @@ int main(int argc, char** argv) {
 
     control::ControlConfig ctrl_cfg;
     common::CameraModel cam_model;
-    if (!loadControlConfig(control_config, &ctrl_cfg, &cam_model, nullptr, camera_config)) {
+    if (!loadControlConfig(control_config, &ctrl_cfg, &cam_model, camera_config)) {
         std::cerr << "Failed to load control config\n";
         return 1;
     }
     control::Controller controller(ctrl_cfg);
-    common::Boresight center_boresight;
-    center_boresight.u_L = cam_model.cx;
-    center_boresight.v_L = cam_model.cy;
 
     galaxy_camera::GalaxyCamera camera;
     if (!camera.open(cam_cfg) || !camera.startGrabbing()) {
@@ -528,7 +525,7 @@ int main(int argc, char** argv) {
                 common::GimbalCommand cmd;
                 const bool has_new_meas = (use_meas.timestamp != last_meas_ts_used);
                 if (has_new_meas || !has_last_cmd) {
-                    cmd = controller.update(use_meas, cam_model, center_boresight, control_state);
+                    cmd = controller.update(use_meas, cam_model, control_state);
                     last_meas_ts_used = use_meas.timestamp;  // 只在新测量帧到来时更新控制指令，其它时间保持上一条指令；解决相机帧率低造成的 闭环自激振荡
                     if (!use_meas.valid) {
                         int64_t dbg_ts = common::nowMs();
@@ -862,8 +859,8 @@ int main(int argc, char** argv) {
                 if (det_log_ts - last_det_log_ts >= 1000) {
                     if (best_det) {
                         const auto& det = *best_det;
-                        double du = det.center.x - center_boresight.u_L;
-                        double dv = det.center.y - center_boresight.v_L;
+                        double du = det.center.x - cam_model.cx;
+                        double dv = det.center.y - cam_model.cy;
                         std::cout << "DBG det_status ts=" << ts
                                   << " uv=(" << det.center.x << "," << det.center.y << ")"
                                   << " du=" << du << " dv=" << dv
@@ -879,7 +876,7 @@ int main(int argc, char** argv) {
                             std::cout << "na,na";
                         }
                         std::cout << ")"
-                                  << " boresight=(" << center_boresight.u_L << "," << center_boresight.v_L << ")"
+                                  << " boresight=(" << cam_model.cx << "," << cam_model.cy << ")"
                                   << "\n";
                     }
                     last_det_log_ts = det_log_ts;
@@ -960,8 +957,8 @@ int main(int argc, char** argv) {
             if (has_cmd) {
                 double err_px = 0.0;
                 if (meas.valid) {
-                    double du = meas.uv.x - center_boresight.u_L;
-                    double dv = meas.uv.y - center_boresight.v_L;
+                    double du = meas.uv.x - cam_model.cx;
+                    double dv = meas.uv.y - cam_model.cy;
                     err_px = std::sqrt(du * du + dv * dv);
                 }
                 pushHistory(&err_history, err_px);
@@ -1044,8 +1041,8 @@ int main(int argc, char** argv) {
 
                 cv::Point boresight_pt(kDisplayWidth / 2, kDisplayHeight / 2);
                 if (got_frame) {
-                    boresight_pt = cv::Point(static_cast<int>(std::round(ox + center_boresight.u_L * sx)),
-                                             static_cast<int>(std::round(oy + center_boresight.v_L * sy)));
+                    boresight_pt = cv::Point(static_cast<int>(std::round(ox + cam_model.cx * sx)),
+                                             static_cast<int>(std::round(oy + cam_model.cy * sy)));
                 }
                 cv::drawMarker(view, boresight_pt, cv::Scalar(0, 0, 255),
                                cv::MARKER_CROSS, 30, 3, cv::LINE_AA);

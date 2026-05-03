@@ -3,10 +3,13 @@
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <fstream>
 #include <iostream>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <sys/select.h>
+#include <linux/serial.h>
 
 namespace gimbal_serial {
 
@@ -44,6 +47,28 @@ bool SerialPort::open(const std::string& device, int baud) {
     if (!setBaud(baud)) {
         close();
         return false;
+    }
+    // ── 降低 USB-串口延迟 ──
+    // 1. 内核低延迟模式 (ASYNC_LOW_LATENCY)
+    struct serial_struct ser_info{};
+    if (ioctl(fd_, TIOCGSERIAL, &ser_info) == 0) {
+        ser_info.flags |= ASYNC_LOW_LATENCY;
+        if (ioctl(fd_, TIOCSSERIAL, &ser_info) == 0) {
+            std::cout << "Serial: ASYNC_LOW_LATENCY enabled\n";
+        }
+    }
+    // 2. USB 芯片 latency_timer → 1ms (FTDI/CH340/CP210x 默认 16ms!)
+    //    从设备路径提取 ttyUSBx
+    auto pos = device.rfind("ttyUSB");
+    if (pos != std::string::npos) {
+        std::string dev_name = device.substr(pos);
+        std::string sysfs = "/sys/bus/usb-serial/devices/" + dev_name + "/latency_timer";
+        std::ofstream ofs(sysfs);
+        if (ofs.is_open()) {
+            ofs << "1";
+            ofs.close();
+            std::cout << "Serial: latency_timer set to 1ms (" << sysfs << ")\n";
+        }
     }
     return true;
 }

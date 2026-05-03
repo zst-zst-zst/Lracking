@@ -85,9 +85,21 @@ void Track::initKalman(const cv::Rect2f& bbox) {
 }
 
 /**
- * 预测下一帧状态
+ * 预测下一帧状态 (dt=1帧, 兼容旧调用)
  */
 void Track::predict() {
+    kf_.predict();
+    age_++;
+    time_since_update_++;
+}
+
+/**
+ * 用实际帧间隔预测: 转移矩阵缩放为 dt_s
+ * 状态速度单位变为 px/s (不再是 px/frame)
+ */
+void Track::predict(float dt_s) {
+    kf_.transitionMatrix.at<float>(0, 2) = dt_s;  // cx += vx * dt
+    kf_.transitionMatrix.at<float>(1, 3) = dt_s;  // cy += vy * dt
     kf_.predict();
     age_++;
     time_since_update_++;
@@ -201,11 +213,8 @@ cv::Rect2f Track::estimatedBbox() const {
 }
 
 cv::Point2f Track::velocity_px_s() const {
-    // Kalman 状态中的速度是 px/frame, 转换为 px/s
-    float dt_s = last_dt_ms_ / 1000.0f;
-    if (dt_s < 1e-6f) dt_s = 0.01f;  // fallback 10ms
-    return cv::Point2f(kf_.statePost.at<float>(2) / dt_s,
-                       kf_.statePost.at<float>(3) / dt_s);
+    // 转移矩阵缩放后, 状态速度已是 px/s
+    return cv::Point2f(kf_.statePost.at<float>(2), kf_.statePost.at<float>(3));
 }
 
 bool Track::diverged() const {
@@ -400,9 +409,11 @@ std::vector<TargetTracker::TrackedTarget> TargetTracker::update(
     const std::vector<std::pair<cv::Rect2f, float>>& detections,
     int64_t timestamp) {
 
-    // 1. 预测所有现有轨迹的下一帧状态
+    // 1. 预测所有现有轨迹的下一帧状态 (用实际 dt 缩放)
     for (auto& track : tracks_) {
-        track->predict();
+        float dt_s = track->lastDtMs() / 1000.0f;
+        if (dt_s < 1e-4f || dt_s > 1.0f) dt_s = 0.01f;  // fallback 10ms
+        track->predict(dt_s);
     }
 
     // 2. 关联匹配: 检测结果 ↔ 现有轨迹

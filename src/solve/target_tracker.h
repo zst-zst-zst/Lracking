@@ -69,6 +69,7 @@ public:
 
     // 预测下一帧状态 (在关联匹配之前调用)
     void predict();
+    void predict(float dt_s);  // 用实际帧间隔缩放转移矩阵
 
     // 用匹配到的检测结果更新 Kalman 滤波器
     void update(const cv::Rect2f& bbox, float confidence, int64_t timestamp);

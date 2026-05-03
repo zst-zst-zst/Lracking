@@ -11,7 +11,8 @@ namespace control {
 struct ControlConfig {
     double kp = 1.0;
     double deadband_px = 2.0;
-    double max_angle_rate = 57.2958;  // deg/s
+    double max_angle_rate = 57.2958;  // deg/s (yaw)
+    double max_angle_rate_pitch = -1.0; // deg/s (pitch独立), -1=使用 max_angle_rate
     double lowpass_alpha = 0.3;
     double yaw_sign = -1.0;    // +1 or -1, applied to yaw error (u-axis)
     double pitch_sign = 1.0;   // +1 or -1, applied to pitch error (v-axis)
@@ -72,6 +73,20 @@ struct ControlConfig {
     double boresight_yaw_deg = 0.0;       // 度, 激光-相机 yaw 角度偏差 (常数项, 距离无关)
     double boresight_pitch_deg = 0.0;     // 度, 激光-相机 pitch 角度偏差 (常数项, 距离无关)
     double target_height_m = 0.050;       // 米, 激光检测模块高度 (S190 50mm)
+    // ── 轴独立增益 (精细 yaw 控制) ──
+    double kp_yaw = -1.0;                 // yaw 独立 kp, -1=使用通用 kp
+    double kp_pitch = -1.0;               // pitch 独立 kp, -1=使用通用 kp
+    double lowpass_alpha_yaw = -1.0;      // yaw 独立低通系数, -1=使用通用 lowpass_alpha
+    double lowpass_alpha_pitch = -1.0;    // pitch 独立低通系数, -1=使用通用 lowpass_alpha
+    double ki_yaw = 0.0;                  // yaw 积分增益 (消除匀速跟踪稳态误差)
+    double ki_pitch = 0.0;                // pitch 积分增益
+    double ki_max_deg = 1.5;              // 积分限幅 (deg), 防止 windup
+    double ff_gain_yaw = 1.0;             // yaw 前馈增益倍率 (>1 = 更积极跟踪横向运动)
+    double ff_gain_pitch = 1.0;           // pitch 前馈增益倍率
+    double ff_alpha_yaw = -1.0;           // yaw 前馈 EMA, -1=使用通用 ff_alpha
+    double ff_alpha_pitch = -1.0;         // pitch 前馈 EMA, -1=使用通用 ff_alpha
+    // ── pitch 速度通道辅助 (补偿云台 pitch 轴位置环响应慢) ──
+    double pitch_rate_assist_kp = 3.0;    // 把 pitch 位置误差注入速度通道 (deg/s per deg error), 0=关闭
     // ── 自适应增益 ──
     bool adaptive_kp = false;             // 远距离自动加大 kp
     double kp_near = 3.0;                 // 近距离 kp (bbox > kp_near_area)
@@ -124,12 +139,15 @@ private:
     bool startup_home_extend_ = false;
     std::chrono::steady_clock::time_point startup_home_extend_tp_{};
     bool in_deadband_ = false;
-    // ── 延迟补偿状态 ──
-    double smooth_vx_ = 0.0;  // 平滑后的像素速度 u方向 (px/s)
-    double smooth_vy_ = 0.0;  // 平滑后的像素速度 v方向 (px/s)
+    // ── 积分项状态 ──
+    double integral_yaw_ = 0.0;   // yaw 积分累积 (deg)
+    double integral_pitch_ = 0.0; // pitch 积分累积 (deg)
     // ── 目标常出现的 pitch (EMA) ──
     double freq_pitch_ = 0.0;  // 目标经常出现的 pitch 位置
     bool has_freq_pitch_ = false;
+    // ── 距离估计 EMA (稳定视差补偿) ──
+    double z_est_smooth_ = 0.0;
+    bool has_z_est_ = false;
     // ── 上一帧发出的指令 (用于指令限幅) ──
     double prev_cmd_yaw_ = 0.0;
     double prev_cmd_pitch_ = 0.0;

@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
 
     control::ControlConfig ctrl_cfg;
     common::CameraModel cam_model;
-    if (!control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, nullptr, camera_config)) {
+    if (!control::loadControlConfig(control_config, &ctrl_cfg, &cam_model, camera_config)) {
         std::cerr << "Failed to load control config\n";
         return 1;
     }
