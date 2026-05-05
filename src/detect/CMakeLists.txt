@@ -31,7 +31,7 @@ set(DETECT_SOURCES
   cascade_detector.cpp
 )
 if(DETECT_WITH_ONNX)
-  list(APPEND DETECT_SOURCES onnx_detector.cpp)
+  list(APPEND DETECT_SOURCES onnx_detector.cpp sr_inferer.cpp)
 endif()
 
 add_library(detect STATIC ${DETECT_SOURCES})
@@ -46,12 +46,23 @@ target_link_libraries(detect PUBLIC
 )
 
 if(DETECT_WITH_ONNX)
-  find_package(onnxruntime QUIET)
-  if(onnxruntime_FOUND)
-    target_link_libraries(detect PUBLIC onnxruntime::onnxruntime)
-  else()
-    # Fallback: assume system-installed onnxruntime
+  set(ORT_ROOT "${TRACKING_SRC}/thirdparty/onnxruntime-linux-x64-gpu-1.23.2")
+  if(EXISTS "${ORT_ROOT}/include/onnxruntime_cxx_api.h")
+    target_include_directories(detect PUBLIC "${ORT_ROOT}/include")
+    target_link_directories(detect PUBLIC "${ORT_ROOT}/lib")
     target_link_libraries(detect PUBLIC onnxruntime)
+    set_property(TARGET detect APPEND PROPERTY
+      INSTALL_RPATH "${ORT_ROOT}/lib")
+    set_property(TARGET detect APPEND PROPERTY
+      BUILD_RPATH "${ORT_ROOT}/lib")
+    message(STATUS "detect: using thirdparty ONNX Runtime at ${ORT_ROOT}")
+  else()
+    find_package(onnxruntime QUIET)
+    if(onnxruntime_FOUND)
+      target_link_libraries(detect PUBLIC onnxruntime::onnxruntime)
+    else()
+      target_link_libraries(detect PUBLIC onnxruntime)
+    endif()
   endif()
   target_compile_definitions(detect PUBLIC DETECT_WITH_ONNX=1)
   message(STATUS "detect: ONNX Runtime backend enabled")

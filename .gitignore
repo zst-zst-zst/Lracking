@@ -13,8 +13,17 @@ records/
 
 # Logs
 logs/
+log/
 src/log/
 *.log
+
+# Training outputs / backups (产生的训练结果不入库)
+src/detect/model/layer2/train_*/
+src/detect/model/layer2/weights/
+src/detect/model/layer2/sr_dataset/
+src/detect/model/sr/
+*.bak_*
+图片/
 
 # Datasets / training data
 dataset/
