@@ -38,6 +38,11 @@ struct CascadeConfig {
     int layer2_input_size = 192;        // 较小输入, ROI 本身就小
     float layer2_conf = 0.40f;          // 置信度阈值 (模块较小, 适当放低)
     float layer2_iou = 0.45f;           // NMS IoU 阈值
+    // 按类阈值: <0 表示走 layer2_conf 兜底. 类序 blue(0) purple(1) red(2)
+    // blue 有误检偏置, 建议 0.65; purple 最稳, 0.55; red 居中, 0.55
+    float layer2_conf_blue = -1.0f;
+    float layer2_conf_purple = -1.0f;
+    float layer2_conf_red = -1.0f;
 
     // ── 后过滤: 宽高比 + 面积比 ──
     // 激光模块外形 72×50mm → 近正方形, 宽高比 ~1.0-1.5
@@ -58,6 +63,22 @@ struct CascadeConfig {
     int strip_min_saturation = 80;             // HSV 饱和度 S 最低阈值
     int strip_min_value = 80;                  // HSV 明度 V 最低阈值
     float strip_contour_elongation = 2.5f;     // 细长判定: 最小外接矩形长宽比
+
+    // ── 实验性: 第2层 ROI 超分 (SR, 默认关) ──
+    // 当 ROI 较小时, 用 ESPCN ×2 上采样后再喂给第2层, 期望提升远距小目标检出.
+    // 需要编译时启用 DETECT_WITH_ONNX, 并提供 sr_onnx 路径.
+    // 数据稀缺暂不期望大幅提升, 留做实场 A/B 对比.
+    bool sr_enable = false;             // 总开关 (默认关)
+    std::string sr_onnx;                // ESPCN ONNX 路径 (相对 cascade.yaml)
+    int sr_scale = 2;                   // 上采样倍数 (与训练一致)
+    int sr_max_roi_size = 320;          // ROI 短边 < 此值才上 SR (大于则跳过, 节省算力)
+
+    // SR 之后的 unsharp mask 锐化 (T 项目同款 trick, 几乎零成本):
+    //   sharp = (1+amount)*src + (-amount)*GaussianBlur(src, sigma)
+    // 把边缘高频补回去, 帮助 YOLO 卷积核响应更强.
+    bool sr_sharpen_enable = true;      // SR 启用时默认开锐化 (sr_enable=0 时本字段无效)
+    float sr_sharpen_sigma = 2.0f;      // 高斯模糊核 sigma (与 T 项目一致)
+    float sr_sharpen_amount = 0.4f;     // 锐化强度 (T 项目: 0.4)
 
     // ── 相对偏移位置预测 ──
     // 第3次锁定后模块停止发光, 无法直接视觉检测。

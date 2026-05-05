@@ -10,6 +10,10 @@
 
 #include "api.h"
 
+#ifdef DETECT_WITH_ONNX
+#include "sr_inferer.h"
+#endif
+
 namespace detect {
 
 // ─── ROI 计算 ─────────────────────────────────────────────────────────
@@ -85,6 +89,9 @@ bool loadCascadeConfig(const std::string& path, CascadeConfig* out) {
     if (!fs["layer2_input_size"].empty()) fs["layer2_input_size"] >> out->layer2_input_size;
     if (!fs["layer2_conf"].empty()) fs["layer2_conf"] >> out->layer2_conf;
     if (!fs["layer2_iou"].empty()) fs["layer2_iou"] >> out->layer2_iou;
+    if (!fs["layer2_conf_blue"].empty())   fs["layer2_conf_blue"]   >> out->layer2_conf_blue;
+    if (!fs["layer2_conf_purple"].empty()) fs["layer2_conf_purple"] >> out->layer2_conf_purple;
+    if (!fs["layer2_conf_red"].empty())    fs["layer2_conf_red"]    >> out->layer2_conf_red;
 
     if (!fs["laser_rx_max_aspect_ratio"].empty()) fs["laser_rx_max_aspect_ratio"] >> out->laser_rx_max_aspect_ratio;
     if (!fs["laser_rx_min_area_ratio"].empty()) fs["laser_rx_min_area_ratio"] >> out->laser_rx_min_area_ratio;
@@ -101,6 +108,23 @@ bool loadCascadeConfig(const std::string& path, CascadeConfig* out) {
     if (!fs["strip_min_saturation"].empty()) fs["strip_min_saturation"] >> out->strip_min_saturation;
     if (!fs["strip_min_value"].empty()) fs["strip_min_value"] >> out->strip_min_value;
     if (!fs["strip_contour_elongation"].empty()) fs["strip_contour_elongation"] >> out->strip_contour_elongation;
+
+    // 超分 (SR) 参数
+    if (!fs["sr_enable"].empty()) {
+        int v = 0;
+        fs["sr_enable"] >> v;
+        out->sr_enable = (v != 0);
+    }
+    out->sr_onnx = readPath("sr_onnx");
+    if (!fs["sr_scale"].empty()) fs["sr_scale"] >> out->sr_scale;
+    if (!fs["sr_max_roi_size"].empty()) fs["sr_max_roi_size"] >> out->sr_max_roi_size;
+    if (!fs["sr_sharpen_enable"].empty()) {
+        int v = 0;
+        fs["sr_sharpen_enable"] >> v;
+        out->sr_sharpen_enable = (v != 0);
+    }
+    if (!fs["sr_sharpen_sigma"].empty()) fs["sr_sharpen_sigma"] >> out->sr_sharpen_sigma;
+    if (!fs["sr_sharpen_amount"].empty()) fs["sr_sharpen_amount"] >> out->sr_sharpen_amount;
 
     // 相对偏移位置预测参数
     if (!fs["offset_predict_enabled"].empty()) {
@@ -254,6 +278,10 @@ struct CascadeDetector::Impl {
     cv::Point2f offset_x_ema{0.0f, 0.0f};  // x偏移 EMA (dx/bw, dy/bh)
     int offset_sample_count = 0;             // 已积累的有效检测次数
     int frames_since_detection = 0;          // 距离上次有效检测的帧数
+
+#ifdef DETECT_WITH_ONNX
+    std::unique_ptr<SrInferer> sr;            // 可选的超分推理器
+#endif
 };
 
 CascadeDetector::CascadeDetector() : impl_(std::make_unique<Impl>()) {}
@@ -294,7 +322,12 @@ bool CascadeDetector::loadConfig(const std::string& path) {
     l2_cfg.num_classes = 3;
     l2_cfg.prep = TRTInferX::PreprocessMode::LETTERBOX;
     l2_cfg.out_mode = TRTInferX::OutputMode::RAW_ONLY;
-    impl_->layer2_opt.conf = cfg.layer2_conf;
+    // TRT 侧用最低的类阈值过滤 (保留低分检测给后续按类过滤)
+    float trt_min_conf = cfg.layer2_conf;
+    if (cfg.layer2_conf_blue   >= 0.f) trt_min_conf = std::min(trt_min_conf, cfg.layer2_conf_blue);
+    if (cfg.layer2_conf_purple >= 0.f) trt_min_conf = std::min(trt_min_conf, cfg.layer2_conf_purple);
+    if (cfg.layer2_conf_red    >= 0.f) trt_min_conf = std::min(trt_min_conf, cfg.layer2_conf_red);
+    impl_->layer2_opt.conf = trt_min_conf;
     impl_->layer2_opt.iou = cfg.layer2_iou;
 
     if (!impl_->layer2_api.load(l2_cfg)) {
@@ -302,6 +335,27 @@ bool CascadeDetector::loadConfig(const std::string& path) {
         return false;
     }
     std::cout << "第2层 (激光模块) 引擎已加载: " << cfg.layer2_engine << "\n";
+
+    // 可选: SR 推理器
+    if (cfg.sr_enable) {
+#ifdef DETECT_WITH_ONNX
+        if (cfg.sr_onnx.empty()) {
+            std::cerr << "sr_enable=1 但 sr_onnx 路径为空, SR 关闭\n";
+        } else {
+            impl_->sr = std::make_unique<SrInferer>();
+            if (!impl_->sr->load(cfg.sr_onnx, cfg.sr_scale)) {
+                std::cerr << "SR 模型加载失败, SR 关闭: " << cfg.sr_onnx << "\n";
+                impl_->sr.reset();
+            } else {
+                std::cout << "SR 已启用: " << cfg.sr_onnx
+                          << " (scale=" << cfg.sr_scale
+                          << ", max_roi=" << cfg.sr_max_roi_size << ")\n";
+            }
+        }
+#else
+        std::cerr << "sr_enable=1 但未编译 DETECT_WITH_ONNX, SR 关闭\n";
+#endif
+    }
 
     impl_->loaded = true;
     return true;
@@ -359,9 +413,16 @@ CascadeResult CascadeDetector::detectCascade(const cv::Mat& bgr, int64_t /*times
     }
 
     // ── ROI裁剪 + 第2层: 检测激光模块 ──
+    // crops 是喂给第2层的图像 (可能经 SR 上采样).
+    // sr_scales 记录每个 crop 相对于原 ROI 的缩放系数, 用于映射坐标回全帧.
     std::vector<cv::Rect> rois;
     std::vector<cv::Mat> crops;
+    std::vector<float> sr_scales;
     std::vector<int> plane_indices;
+
+#ifdef DETECT_WITH_ONNX
+    const bool sr_active = (impl_->sr && impl_->sr->ready());
+#endif
 
     for (int i = 0; i < static_cast<int>(result.planes.size()); ++i) {
         cv::Rect roi = computeRoi(
@@ -375,8 +436,29 @@ CascadeResult CascadeDetector::detectCascade(const cv::Mat& bgr, int64_t /*times
         if (crop.empty()) {
             continue;
         }
+        float scale = 1.0f;
+#ifdef DETECT_WITH_ONNX
+        if (sr_active && std::min(crop.cols, crop.rows) < cfg.sr_max_roi_size) {
+            cv::Mat sr_crop = impl_->sr->upscale(crop);
+            if (!sr_crop.empty()) {
+                scale = static_cast<float>(impl_->sr->scale());
+                crop = sr_crop;
+                // T 项目同款: SR 后 unsharp mask 锐化, 提升边缘让 YOLO 卷积响应更强.
+                // 几乎零成本, 默认开启.
+                if (cfg.sr_sharpen_enable && cfg.sr_sharpen_amount > 0.0f) {
+                    cv::Mat blurred;
+                    cv::GaussianBlur(crop, blurred, cv::Size(0, 0),
+                                     cfg.sr_sharpen_sigma);
+                    cv::addWeighted(crop, 1.0f + cfg.sr_sharpen_amount,
+                                    blurred, -cfg.sr_sharpen_amount,
+                                    0.0, crop);
+                }
+            }
+        }
+#endif
         rois.push_back(roi);
         crops.push_back(crop);
+        sr_scales.push_back(scale);
         plane_indices.push_back(i);
     }
 
@@ -409,14 +491,22 @@ CascadeResult CascadeDetector::detectCascade(const cv::Mat& bgr, int64_t /*times
         const auto& dets = l2_dets[batch_idx];
         const auto& roi = rois[batch_idx];
         const auto& crop = crops[batch_idx];
+        const float sr_s = sr_scales[batch_idx];
         int pi = plane_indices[batch_idx];
         float roi_area = static_cast<float>(roi.width * roi.height);
 
         for (const auto& det : dets) {
             // 3 类模型: blue(0), purple(1), red(2) 均为激光模块, 全部接受
+            // ── 按类置信度阈值 ──
+            float cls_thr = cfg.layer2_conf;
+            if      (det.cls == 0 && cfg.layer2_conf_blue   >= 0.f) cls_thr = cfg.layer2_conf_blue;
+            else if (det.cls == 1 && cfg.layer2_conf_purple >= 0.f) cls_thr = cfg.layer2_conf_purple;
+            else if (det.cls == 2 && cfg.layer2_conf_red    >= 0.f) cls_thr = cfg.layer2_conf_red;
+            if (det.score < cls_thr) continue;
 
-            float det_w = det.x2 - det.x1;
-            float det_h = det.y2 - det.y1;
+            // det 坐标处于 (经 SR 后的) crop 空间
+            float det_w = (det.x2 - det.x1) / sr_s;
+            float det_h = (det.y2 - det.y1) / sr_s;
 
             // ── 宽高比过滤 ──
             float aspect = (det_w > det_h)
@@ -436,7 +526,7 @@ CascadeResult CascadeDetector::detectCascade(const cv::Mat& bgr, int64_t /*times
 
             // ── 经典 CV 灯带拒绝 (HSV颜色 + 轮廓形状) ──
             if (cfg.strip_reject_enabled) {
-                // 从裁剪图中提取检测区域 (坐标相对于裁剪图)
+                // 从裁剪图中提取检测区域 (坐标相对于 SR 后的 crop)
                 int bx1 = std::max(0, static_cast<int>(det.x1));
                 int by1 = std::max(0, static_cast<int>(det.y1));
                 int bx2 = std::min(crop.cols, static_cast<int>(det.x2));
@@ -450,15 +540,15 @@ CascadeResult CascadeDetector::detectCascade(const cv::Mat& bgr, int64_t /*times
             }
 
             LaserRxDetection lrx;
-            // 从裁剪图坐标映射到全帧坐标
+            // 从 SR 后的 crop 坐标先除以 sr_s 还原到原始 ROI 坐标, 再加 ROI 偏移
             lrx.bbox = cv::Rect(
-                static_cast<int>(det.x1) + roi.x,
-                static_cast<int>(det.y1) + roi.y,
+                static_cast<int>(det.x1 / sr_s) + roi.x,
+                static_cast<int>(det.y1 / sr_s) + roi.y,
                 static_cast<int>(det_w),
                 static_cast<int>(det_h));
             lrx.center = cv::Point2f(
-                (det.x1 + det.x2) * 0.5f + roi.x,
-                (det.y1 + det.y2) * 0.5f + roi.y);
+                (det.x1 + det.x2) * 0.5f / sr_s + roi.x,
+                (det.y1 + det.y2) * 0.5f / sr_s + roi.y);
             lrx.confidence = det.score;
             lrx.plane_index = pi;
             lrx.roi = roi;

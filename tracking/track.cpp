@@ -592,6 +592,7 @@ int main(int argc, char** argv) {
     std::map<int, std::deque<cv::Point2f>> trail_history;
     std::map<int, int> trail_last_seen;
     std::map<int, std::string> trail_color;  // 每个 track_id 当前的颜色
+    std::map<int, float> trail_ema_size;     // 每个 track_id 的 EMA 平滑边长 (像素)
     const int kTrailMaxLen = 180;
     const int kTrailKeepFrames = 90;
 
@@ -695,22 +696,16 @@ int main(int argc, char** argv) {
         learn_log.flush();
     }
 
+    // VideoWriter 推迟到拿到第一帧后再打开 (用真实 frame.size())
+    // 关键 bug 修复: Galaxy 相机时 cap 未开, 旧代码兜底 1280x720 与实际 1280x1024 不匹配,
+    // 导致 writer.write() 静默失败, 输出 mp4 只有头没有帧 (~258 字节, 无法播放).
+    double record_fps = 30.0;
+    if (cap.isOpened()) {
+        double f = cap.get(cv::CAP_PROP_FPS);
+        if (f > 1.0 && f < 240.0) record_fps = f;
+    }
     if (enable_record) {
-        int fw = static_cast<int>(cap.isOpened() ? cap.get(cv::CAP_PROP_FRAME_WIDTH) : 0);
-        int fh = static_cast<int>(cap.isOpened() ? cap.get(cv::CAP_PROP_FRAME_HEIGHT) : 0);
-        if (fw <= 0 || fh <= 0) {
-            fw = 1280;
-            fh = 720;
-        }
-        double fps = cap.isOpened() ? cap.get(cv::CAP_PROP_FPS) : 0.0;
-        if (fps <= 0.0) fps = 30.0;
-        writer.open(record_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), fps, cv::Size(fw, fh));
-        if (writer.isOpened()) {
-            std::cout << "录制: " << record_path << " (" << fw << "x" << fh << " @ " << fps << "fps)\n";
-        } else {
-            std::cerr << "视频录制打开失败: " << record_path << "\n";
-            enable_record = false;
-        }
+        std::cout << "录制(待开): " << record_path << " (尺寸=首帧, fps≈" << record_fps << ")\n";
     }
 
     std::cout << "正在运行... (q/ESC退出, c=切换颜色掩码显示)\n";
@@ -724,6 +719,21 @@ int main(int argc, char** argv) {
             frame = gf.bgr.clone();
         } else {
             if (!cap.read(frame) || frame.empty()) break;
+        }
+
+        // 首帧到达时按实际尺寸打开 VideoWriter (修复 Galaxy 1280x1024 ≠ 兜底 1280x720 的录制失败)
+        if (enable_record && !writer.isOpened()) {
+            writer.open(record_path,
+                        cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                        record_fps, frame.size());
+            if (writer.isOpened()) {
+                std::cout << "录制已开: " << record_path
+                          << " (" << frame.cols << "x" << frame.rows
+                          << " @ " << record_fps << "fps)\n";
+            } else {
+                std::cerr << "✗ VideoWriter 打开失败, 录制关闭: " << record_path << "\n";
+                enable_record = false;
+            }
         }
 
         int64_t ts = common::nowMs();
@@ -951,8 +961,20 @@ int main(int argc, char** argv) {
 
             cv::Scalar box_color = (tt.state == solve::TrackState::CONFIRMED)
                                        ? trail_col : cv::Scalar(128, 128, 128);
-            cv::rectangle(frame, bbox, box_color, 2);
+
+            // ── 视觉稳定化: 锁方形 + 尺寸 EMA + 聚焦环 ──
+            // laser_rx 物理 50×50mm 近似正方形, 强制绘制为方框, 避免 YOLO 扭曲
+            // 彻底平滑尺寸抗抖动, 同时 5帧指数 ≈ 足以跟上真实远近变化
+            float raw_side = std::max(bbox.width, bbox.height) * 1.0f;
+            auto &ema = trail_ema_size[tt.track_id];
+            if (ema <= 0.f) ema = raw_side;
+            ema = 0.7f * ema + 0.3f * raw_side;
+            int side = std::max(8, static_cast<int>(ema));
+            cv::Rect square_bbox(center.x - side / 2, center.y - side / 2, side, side);
+            cv::rectangle(frame, square_bbox, box_color, 2);
+            // 中心十字 + 固定小圆环, 不管远近都方便肉眼定位
             cv::drawMarker(frame, center, box_color, cv::MARKER_CROSS, 20, 2);
+            cv::circle(frame, center, 10, box_color, 1, cv::LINE_AA);
 
             auto& trail = trail_history[tt.track_id];
             trail.push_back(tt.center);
@@ -986,6 +1008,7 @@ int main(int argc, char** argv) {
                 frame_count - last_seen_it->second > kTrailKeepFrames) {
                 trail_last_seen.erase(last_seen_it);
                 trail_color.erase(track_id);
+                trail_ema_size.erase(track_id);
                 it = trail_history.erase(it);
             } else {
                 ++it;

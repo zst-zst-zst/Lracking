@@ -51,10 +51,33 @@ roi_min_size: 64
 # 训练模式:
 #   多类 (当前): blue/purple/red 激光模块，颜色和形状特征
 #   经典 CV 灯带拒绝在两种模式下都生效，形成多层防御。
-layer2_input_size: 256               # 较大输入，保留更多细节
-layer2_conf: 0.40                    # 置信度阈值 (模块较小，适当放低)
+layer2_input_size: 640               # yolo11n 训练分辨率，对小目标敏感
+layer2_conf: 0.55                    # 置信度阈值. 之前 0.40 误检爆炸 (背景列 →
+                                     # 100% 落到 blue/red/purple 三类). PR 曲线显示 conf>0.55 后 precision~0.9,
+                                     # recall 仅降 5% 左右, 配合下游偏移预测+多帧跟踪能完全吸收.
+                                     # 误检还多 → 0.60-0.65; 漏检多 → 0.50
 layer2_iou: 0.45                     # NMS IoU 阈值
 layer2_class_names: [ "blue", "purple", "red" ]   # 3类激光模块
+
+# ── 按类置信度阈值 (层 1 ROI 评测显示 blue 类误检占 ~65%, red ~28%, purple ~7%) ──
+# 设为负数 = 走 layer2_conf 兜底. 推荐 blue 更高, 单独压制.
+layer2_conf_blue:   0.65             # blue 有系统性误检偏置, 专门拉高
+layer2_conf_purple: 0.55             # purple 最稳, 基准
+layer2_conf_red:    0.55             # red 居中
+
+# ── 实验性: ROI 超分 (默认关) ──
+# 当 ROI 短边 < sr_max_roi_size 时, 用 ESPCN ×2 上采样后再喂给第2层.
+# 当前模型用合成下采样训练 (PSNR 36 dB 但实际视觉提升微小), 需要重训于真实远距素材才有显著效果.
+# 编译需 -DDETECT_WITH_ONNX=ON, 否则即使 sr_enable=1 也不会生效.
+sr_enable: 0                          # 0=关闭(默认), 1=启用
+sr_onnx: "../src/detect/model/export/espcn_x2.onnx"
+sr_scale: 2                           # 与训练倍数一致
+sr_max_roi_size: 320                  # ROI 短边 < 此值才上 SR (大于则跳过)
+# SR 后 unsharp mask 锐化 (T 项目同款 trick): sharp = (1+amount)*src - amount*Blur(src, sigma)
+# 几乎零成本, SR 开启时默认也开. 设为 0 即可关闭.
+sr_sharpen_enable: 1                  # 0=关 1=开 (仅在 sr_enable=1 时生效)
+sr_sharpen_sigma: 2.0                 # 高斯模糊核 sigma
+sr_sharpen_amount: 0.4                # 锐化强度 (T 项目: 0.4)
 
 # ── 后过滤: 宽高比 + 面积比 ──
 # 激光检测模块外形: 72mm × 50mm × 50mm, 检测区域 φ42mm → 近正方形, 宽高比 ~1.0-1.5
