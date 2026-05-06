@@ -26,7 +26,12 @@ set(TRACKING_INC
   ${SRC_ROOT}/plotter
 )
 
-add_executable(tracking ${CMAKE_CURRENT_LIST_DIR}/track.cpp)
-target_include_directories(tracking PRIVATE ${TRACKING_INC} ${SRC_ROOT})
+add_executable(tracking
+  ${CMAKE_CURRENT_LIST_DIR}/track.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/visualization.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/color_voting.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/control_learner.cpp
+)
+target_include_directories(tracking PRIVATE ${TRACKING_INC} ${SRC_ROOT} ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(tracking PRIVATE
   detect solve galaxy_camera gimbal_serial control plotter common ${OpenCV_LIBS})
