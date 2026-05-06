@@ -45,5 +45,5 @@ endif()
 if(NOT TARGET gimbal_serial)
   add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../gimbal ${CMAKE_CURRENT_BINARY_DIR}/gimbal_serial_build)
 endif()
-add_executable(tracking_system examples/system_demo.cpp)
-target_link_libraries(tracking_system PRIVATE control detect galaxy_camera gimbal_serial common)
+# 已移除: examples/system_demo.cpp (引用不存在的 measurement.h, 功能与 tracking/track.cpp 重复)
+# 如需恢复: 还原此处并补 measurement.h

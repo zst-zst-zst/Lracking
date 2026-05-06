@@ -1,7 +1,5 @@
-# Build
+# Build (顶层 CMakeLists.txt 后, 统一构建到 ./build/)
 build/
-src/build/
-tests/build/
 */build/
 
 # Install
@@ -11,9 +9,8 @@ install/
 # Records (auto-generated videos)
 records/
 
-# Logs
+# Logs (统一到 ./logs/, 含 ./logs/training/ 训练日志)
 logs/
-log/
 src/log/
 *.log
 
