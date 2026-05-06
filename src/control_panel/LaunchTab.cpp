@@ -174,10 +174,12 @@ void LaunchTab::onProcStopped(int code, int /*status*/) {
     setRunningState(false);
     status_lbl_->setText(QString("● 已停止  退出码=%1").arg(code));
     status_lbl_->setStyleSheet(code == 0 ? "color: #aaaaaa;" : "color: #d46e6e;");
+    emit procStopped();
 }
 
 void LaunchTab::onProcOutput(const QString& line) {
     log_view_->appendPlainText(line);
+    emit procOutput(line);
 }
 
 void LaunchTab::onProcError(const QString& msg) {

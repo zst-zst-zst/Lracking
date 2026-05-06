@@ -15,6 +15,7 @@ set(CONTROL_PANEL_SOURCES
   ControlPanel.cpp
   LaunchTab.cpp
   ConfigTab.cpp
+  StatusTab.cpp
   ProcessManager.cpp
 )
 
@@ -22,6 +23,7 @@ set(CONTROL_PANEL_HEADERS
   ControlPanel.h
   LaunchTab.h
   ConfigTab.h
+  StatusTab.h
   ProcessManager.h
 )
 

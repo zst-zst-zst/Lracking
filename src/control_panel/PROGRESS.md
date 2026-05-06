@@ -72,9 +72,9 @@ src/control_panel/
 - [x] control.yaml 表单 (PID/FF gain)
 - [x] camera.yaml 表单 (曝光/增益)
 
-### Session 4: StatusTab + LogView
-- [ ] LogView: 滚动日志 + 颜色标记
-- [ ] StatusTab: 解析 tracking stdout 提取 fps/track/color, 实时 label 显示
+### Session 4: StatusTab + LogView ✅
+- [x] (LogView 已在 Session 2 完成) + 颜色标记
+- [x] StatusTab: 解析 tracking stdout 提取 fps/track/color, 实时 label 显示
 
 ### Session 5: RecordsTab + ToolsTab
 - [ ] RecordsTab: 列出 records/ 视频, 双击选中送给 LaunchTab --video
@@ -89,6 +89,6 @@ src/control_panel/
 
 ## 当前状态
 
-**[Session 3 完成 ✅, 等待 Session 4]**
+**[Session 4 完成 ✅, 等待 Session 5]**
 
 下次启动: 实现 LaunchTab + ProcessManager, 让 GUI 能真正起停 tracking.

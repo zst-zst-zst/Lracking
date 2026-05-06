@@ -1,6 +1,7 @@
 #include "ControlPanel.h"
 #include "LaunchTab.h"
 #include "ConfigTab.h"
+#include "StatusTab.h"
 
 #include <QApplication>
 #include <QLabel>
@@ -48,11 +49,14 @@ ControlPanel::ControlPanel(QWidget* parent) : QMainWindow(parent) {
 void ControlPanel::buildUi() {
     tabs_ = new QTabWidget(this);
 
-    tabs_->addTab(new LaunchTab, "启动");
+    auto* launch = new LaunchTab;
+    auto* status = new StatusTab;
+    QObject::connect(launch, &LaunchTab::procOutput, status, &StatusTab::onProcLine);
+    QObject::connect(launch, &LaunchTab::procStopped, status, &StatusTab::onProcStopped);
+
+    tabs_->addTab(launch, "启动");
     tabs_->addTab(new ConfigTab, "配置");
-    tabs_->addTab(makePlaceholderTab("Status",
-                                     "实时 fps / 跟踪 ID / 命中率 / 当前敌方颜色\n(Session 4 实现)"),
-                  "状态");
+    tabs_->addTab(status, "状态");
     tabs_->addTab(makePlaceholderTab("Records",
                                      "浏览 records/ 录像, 双击送回放\n(Session 5 实现)"),
                   "录像");

@@ -24,6 +24,11 @@ public:
     // 暴露给 RecordsTab: 设置 video 路径并切到调试模式
     void setVideoPath(const QString& path);
 
+signals:
+    // 转发给 StatusTab 等需要监听 tracking 输出的 tab
+    void procOutput(const QString& line);
+    void procStopped();
+
 private slots:
     void onStart();
     void onStop();

@@ -1065,6 +1065,29 @@ int main(int argc, char** argv) {
         double fps = elapsed > 0 ? frame_count * 1000.0 / elapsed : 0;
         if (elapsed >= 3000) { frame_count = 0; fps_start = now; }
 
+        // ── 结构化状态行 (供 control_panel StatusTab 解析, 每 ~30 帧一条) ──
+        static int status_emit_counter = 0;
+        if (++status_emit_counter >= 30) {
+            status_emit_counter = 0;
+            int track_count = static_cast<int>(tracked.size());
+            int primary_id = -1;
+            std::string primary_color = "none";
+            float primary_conf = 0.0f;
+            if (!tracked.empty()) {
+                primary_id = tracked.front().track_id;
+                auto it = trail_color.find(primary_id);
+                if (it != trail_color.end()) primary_color = it->second;
+            }
+            std::cout << "STATUS"
+                      << " fps=" << std::fixed << std::setprecision(1) << fps
+                      << " tracks=" << track_count
+                      << " primary_id=" << primary_id
+                      << " color=" << primary_color
+                      << " conf=" << std::setprecision(2) << primary_conf
+                      << " enemy=" << enemy_color
+                      << "\n" << std::flush;
+        }
+
         int y = 20;
         auto putHud = [&](const std::string& text, cv::Scalar c) {
             cv::putText(frame, text, cv::Point(10, y),
