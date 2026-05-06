@@ -61,9 +61,10 @@ src/control_panel/
 - 输出: build/bin/control_panel
 
 ### Session 2: LaunchTab + ProcessManager
-- [ ] ProcessManager: QProcess 包装, 启动 tracking 二进制 + 参数
+- [ ] ProcessManager: QProcess 包装, 启动二进制 + 参数
+- [ ] **模式切换 dropdown**: 调试 (tracking, src/tracking/track.cpp) / 比赛 (tracking_main, src/control/examples/tracking_main.cpp)
 - [ ] LaunchTab: 颜色 combo / 端口 / video 文件 / no-gimbal checkbox / Start/Stop
-- [ ] 实时 stdout 接到 LogView
+- [ ] 实时 stdout 接到 LogView (默认折叠, 用户可展开)
 
 ### Session 3: ConfigTab × 3
 - [ ] YamlForm: yaml-cpp 加载/保存 + 字段 <-> widget 双向绑定
@@ -83,6 +84,8 @@ src/control_panel/
 - [ ] 主题 (深色 stylesheet)
 - [ ] 偏好持久化 (QSettings)
 - [ ] 预检按钮 (串口/相机存在性检查)
+- [ ] **plotter 接入**: 嵌入 plotter 实时绘图 (轨迹/PID 曲线/帧率), 取代独立窗口
+- [ ] **日志窗可折叠**: 用户体验, 默认收起底栏只看状态, 需要时展开
 
 ## 当前状态
 
