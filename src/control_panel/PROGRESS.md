@@ -66,11 +66,11 @@ src/control_panel/
 - [x] LaunchTab: 颜色 combo / 端口 / video 文件 / no-gimbal checkbox / Start/Stop
 - [x] 实时 stdout 接到 LogView (默认折叠, 用户可展开)
 
-### Session 3: ConfigTab × 3
-- [ ] YamlForm: yaml-cpp 加载/保存 + 字段 <-> widget 双向绑定
-- [ ] cascade.yaml 表单 (阈值, conf 按色)
-- [ ] control.yaml 表单 (PID/FF gain)
-- [ ] camera.yaml 表单 (曝光/增益)
+### Session 3: ConfigTab × 3 ✅
+- [x] YamlForm: cv::FileStorage 加载 + 文本替换保存 (保留注释) 加载/保存 + 字段 <-> widget 双向绑定
+- [x] cascade.yaml 表单 (阈值, conf 按色)
+- [x] control.yaml 表单 (PID/FF gain)
+- [x] camera.yaml 表单 (曝光/增益)
 
 ### Session 4: StatusTab + LogView
 - [ ] LogView: 滚动日志 + 颜色标记
@@ -89,6 +89,6 @@ src/control_panel/
 
 ## 当前状态
 
-**[Session 2 完成 ✅, 等待 Session 3]**
+**[Session 3 完成 ✅, 等待 Session 4]**
 
 下次启动: 实现 LaunchTab + ProcessManager, 让 GUI 能真正起停 tracking.

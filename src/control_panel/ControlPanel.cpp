@@ -1,5 +1,6 @@
 #include "ControlPanel.h"
 #include "LaunchTab.h"
+#include "ConfigTab.h"
 
 #include <QApplication>
 #include <QLabel>
@@ -48,9 +49,7 @@ void ControlPanel::buildUi() {
     tabs_ = new QTabWidget(this);
 
     tabs_->addTab(new LaunchTab, "启动");
-    tabs_->addTab(makePlaceholderTab("Config",
-                                     "编辑 cascade.yaml / control.yaml / camera.yaml\n(Session 3 实现)"),
-                  "配置");
+    tabs_->addTab(new ConfigTab, "配置");
     tabs_->addTab(makePlaceholderTab("Status",
                                      "实时 fps / 跟踪 ID / 命中率 / 当前敌方颜色\n(Session 4 实现)"),
                   "状态");

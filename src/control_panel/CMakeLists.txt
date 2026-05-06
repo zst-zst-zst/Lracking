@@ -8,21 +8,20 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 find_package(Qt5 COMPONENTS Core Widgets Gui REQUIRED)
-
-# yaml-cpp 用于 ConfigTab 解析 yaml (Tracking 已使用 OpenCV FileStorage,
-# 但表单编辑场景下 yaml-cpp 更灵活, 系统通常已安装)
-find_package(yaml-cpp QUIET)
+find_package(OpenCV REQUIRED)  # ConfigTab 用 cv::FileStorage 读 yaml
 
 set(CONTROL_PANEL_SOURCES
   main.cpp
   ControlPanel.cpp
   LaunchTab.cpp
+  ConfigTab.cpp
   ProcessManager.cpp
 )
 
 set(CONTROL_PANEL_HEADERS
   ControlPanel.h
   LaunchTab.h
+  ConfigTab.h
   ProcessManager.h
 )
 
@@ -37,9 +36,5 @@ target_link_libraries(control_panel PRIVATE
   Qt5::Core
   Qt5::Widgets
   Qt5::Gui
+  ${OpenCV_LIBS}
 )
-
-if(yaml-cpp_FOUND)
-  target_link_libraries(control_panel PRIVATE yaml-cpp::yaml-cpp)
-  target_compile_definitions(control_panel PRIVATE HAVE_YAML_CPP)
-endif()
