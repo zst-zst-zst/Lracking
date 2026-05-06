@@ -60,11 +60,11 @@ src/control_panel/
 - [x] 验证: ./build/bin/control_panel -platform offscreen 跑起来无错误
 - 输出: build/bin/control_panel
 
-### Session 2: LaunchTab + ProcessManager
-- [ ] ProcessManager: QProcess 包装, 启动二进制 + 参数
-- [ ] **模式切换 dropdown**: 调试 (tracking, src/tracking/track.cpp) / 比赛 (tracking_main, src/control/examples/tracking_main.cpp)
-- [ ] LaunchTab: 颜色 combo / 端口 / video 文件 / no-gimbal checkbox / Start/Stop
-- [ ] 实时 stdout 接到 LogView (默认折叠, 用户可展开)
+### Session 2: LaunchTab + ProcessManager ✅
+- [x] ProcessManager: QProcess 包装, 启动二进制 + 参数
+- [x] **模式切换 dropdown**: 调试 (tracking, src/tracking/track.cpp) / 比赛 (tracking_main, src/control/examples/tracking_main.cpp)
+- [x] LaunchTab: 颜色 combo / 端口 / video 文件 / no-gimbal checkbox / Start/Stop
+- [x] 实时 stdout 接到 LogView (默认折叠, 用户可展开)
 
 ### Session 3: ConfigTab × 3
 - [ ] YamlForm: yaml-cpp 加载/保存 + 字段 <-> widget 双向绑定
@@ -89,6 +89,6 @@ src/control_panel/
 
 ## 当前状态
 
-**[Session 1 完成 ✅, 等待启动 Session 2]**
+**[Session 2 完成 ✅, 等待 Session 3]**
 
 下次启动: 实现 LaunchTab + ProcessManager, 让 GUI 能真正起停 tracking.

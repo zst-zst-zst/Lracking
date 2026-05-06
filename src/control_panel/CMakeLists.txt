@@ -16,10 +16,14 @@ find_package(yaml-cpp QUIET)
 set(CONTROL_PANEL_SOURCES
   main.cpp
   ControlPanel.cpp
+  LaunchTab.cpp
+  ProcessManager.cpp
 )
 
 set(CONTROL_PANEL_HEADERS
   ControlPanel.h
+  LaunchTab.h
+  ProcessManager.h
 )
 
 add_executable(control_panel

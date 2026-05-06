@@ -1,4 +1,5 @@
 #include "ControlPanel.h"
+#include "LaunchTab.h"
 
 #include <QApplication>
 #include <QLabel>
@@ -46,9 +47,7 @@ ControlPanel::ControlPanel(QWidget* parent) : QMainWindow(parent) {
 void ControlPanel::buildUi() {
     tabs_ = new QTabWidget(this);
 
-    tabs_->addTab(makePlaceholderTab("Launch",
-                                     "启动/停止 tracking 进程、选择颜色/端口/视频\n(Session 2 实现)"),
-                  "启动");
+    tabs_->addTab(new LaunchTab, "启动");
     tabs_->addTab(makePlaceholderTab("Config",
                                      "编辑 cascade.yaml / control.yaml / camera.yaml\n(Session 3 实现)"),
                   "配置");

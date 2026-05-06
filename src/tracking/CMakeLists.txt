@@ -26,12 +26,27 @@ set(TRACKING_INC
   ${SRC_ROOT}/plotter
 )
 
-add_executable(tracking
-  ${CMAKE_CURRENT_LIST_DIR}/track.cpp
+# 共享模块 (visualization/color_voting/control_learner) 给两个入口都用
+set(TRACKING_SHARED_SRC
   ${CMAKE_CURRENT_LIST_DIR}/visualization.cpp
   ${CMAKE_CURRENT_LIST_DIR}/color_voting.cpp
   ${CMAKE_CURRENT_LIST_DIR}/control_learner.cpp
 )
+
+# 调试入口: 桌面/视频测试, 不需真机
+add_executable(tracking
+  ${CMAKE_CURRENT_LIST_DIR}/track.cpp
+  ${TRACKING_SHARED_SRC}
+)
 target_include_directories(tracking PRIVATE ${TRACKING_INC} ${SRC_ROOT} ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(tracking PRIVATE
+  detect solve galaxy_camera gimbal_serial control plotter common ${OpenCV_LIBS})
+
+# 比赛主入口: 完整链路, 真机用
+add_executable(tracking_main
+  ${CMAKE_CURRENT_LIST_DIR}/tracking_main.cpp
+  ${TRACKING_SHARED_SRC}
+)
+target_include_directories(tracking_main PRIVATE ${TRACKING_INC} ${SRC_ROOT} ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(tracking_main PRIVATE
   detect solve galaxy_camera gimbal_serial control plotter common ${OpenCV_LIBS})

@@ -35,17 +35,4 @@ target_link_libraries(control
 
 # control_demo 已移至 tests/control_demo.cpp
 
-# ── 比赛主系统 ──
-if(NOT TARGET galaxy_camera)
-  add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../camera ${CMAKE_CURRENT_BINARY_DIR}/galaxy_camera_build)
-endif()
-if(NOT TARGET detect)
-  add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../detect ${CMAKE_CURRENT_BINARY_DIR}/detect_build)
-endif()
-if(NOT TARGET gimbal_serial)
-  add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../gimbal ${CMAKE_CURRENT_BINARY_DIR}/gimbal_serial_build)
-endif()
-# 主比赛系统入口 (tracking_main): 完整链路 = 相机 + 检测 + 控制 + 云台串口
-# (调试/桌面测试用 src/tracking/track.cpp; 比赛/真机用此处)
-add_executable(tracking_main examples/tracking_main.cpp)
-target_link_libraries(tracking_main PRIVATE control detect galaxy_camera gimbal_serial common)
+# 主入口 tracking_main 已移至 src/tracking/tracking_main.cpp (由 src/tracking/CMakeLists.txt 构建)
