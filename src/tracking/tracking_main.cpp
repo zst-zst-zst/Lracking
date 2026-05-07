@@ -17,6 +17,7 @@
 #include <cmath>
 #include <deque>
 #include <csignal>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -216,6 +217,9 @@ int main(int argc, char** argv) {
     bool window_ready = false;
     int window_guard = 0;
     bool exit_on_close = false;
+    std::string record_dir;
+    std::string record_format = "mjpg";  // mjpg|mp4v: mjpg+.avi 兼容性最好, 强杀也能播
+    bool enable_record = true;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -240,6 +244,12 @@ int main(int argc, char** argv) {
             show = false;
         } else if (arg == "--exit-on-close") {
             exit_on_close = true;
+        } else if (arg == "--record-dir" && i + 1 < argc) {
+            record_dir = argv[++i];
+        } else if (arg == "--record-format" && i + 1 < argc) {
+            record_format = argv[++i];
+        } else if (arg == "--no-record") {
+            enable_record = false;
         }
     }
 
@@ -728,6 +738,25 @@ int main(int argc, char** argv) {
     int lost_streak = 0;
     int64_t last_det_log_ts = 0;
 
+    // ── 自动录制 (lazy open: 拿到首帧后用真实尺寸打开) ──
+    cv::VideoWriter writer;
+    std::string record_path;
+    double record_fps = 30.0;
+    if (enable_record) {
+        if (record_dir.empty()) record_dir = "records/match";
+        std::filesystem::create_directories(record_dir);
+        auto now_t = std::chrono::system_clock::now();
+        auto time_c = std::chrono::system_clock::to_time_t(now_t);
+        std::tm ltm{};
+        localtime_r(&time_c, &ltm);
+        std::ostringstream fn;
+        const std::string ext = (record_format == "mp4v") ? ".mp4" : ".avi";
+        fn << "match_" << std::put_time(&ltm, "%Y-%m-%d_%H-%M-%S") << ext;
+        record_path = (std::filesystem::path(record_dir) / fn.str()).string();
+        std::cout << "录制(待开): " << record_path << " (尺寸=首帧, fps≈" << record_fps
+                  << ", " << record_format << ")\n";
+    }
+
     std::cout << "Enter detect/control loops\n";
     std::cout << std::flush;
     while (true) {
@@ -737,6 +766,27 @@ int main(int argc, char** argv) {
         try {
             galaxy_camera::Frame frame;
             bool got_frame = camera.read(&frame, cam_cfg.grab_timeout_ms);
+
+            // 首帧到达时按实际尺寸 lazy open
+            if (enable_record && got_frame && !writer.isOpened() && !frame.bgr.empty()) {
+                int fourcc = (record_format == "mp4v")
+                    ? cv::VideoWriter::fourcc('m', 'p', '4', 'v')
+                    : cv::VideoWriter::fourcc('M', 'J', 'P', 'G');
+                writer.open(record_path, fourcc, record_fps, frame.bgr.size());
+                if (writer.isOpened()) {
+                    std::cout << "录制已开: " << record_path
+                              << " (" << frame.bgr.cols << "x" << frame.bgr.rows
+                              << " @ " << record_fps << "fps)\n";
+                } else {
+                    std::cerr << "✗ VideoWriter 打开失败, 录制关闭: " << record_path << "\n";
+                    enable_record = false;
+                }
+            }
+            // 每帧写入
+            if (enable_record && writer.isOpened() && got_frame && !frame.bgr.empty()) {
+                writer.write(frame.bgr);
+            }
+
             if (got_frame && frame.bgr.empty()) {
                 got_frame = false;
             }
@@ -1170,6 +1220,10 @@ int main(int argc, char** argv) {
     }
 
     g_should_exit.store(true);
+    if (writer.isOpened()) {
+        writer.release();
+        std::cout << "录制已关闭: " << record_path << "\n";
+    }
     if (control_thread.joinable()) {
         control_thread.join();
     }

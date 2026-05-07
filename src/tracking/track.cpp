@@ -174,6 +174,7 @@ int main(int argc, char** argv) {
     std::string enemy_color = "red";
     std::string video_path;
     std::string record_dir;
+    std::string record_format = "mjpg";  // mjpg|mp4v: mjpg+.avi 兼容性最好, 强杀也能播
     bool enable_gimbal = true;
     bool enable_record = true;
     bool show_color_mask = false;
@@ -188,6 +189,7 @@ int main(int argc, char** argv) {
         else if (arg == "--color" && i + 1 < argc) enemy_color = argv[++i];
         else if (arg == "--video" && i + 1 < argc) video_path = argv[++i];
         else if (arg == "--record-dir" && i + 1 < argc) record_dir = argv[++i];
+        else if (arg == "--record-format" && i + 1 < argc) record_format = argv[++i];
         else if (arg == "--no-record") enable_record = false;
         else if (arg == "--no-gimbal") enable_gimbal = false;
     }
@@ -285,7 +287,8 @@ int main(int argc, char** argv) {
         std::tm ltm{};
         localtime_r(&time_c, &ltm);
         std::ostringstream fn;
-        fn << "tracking_" << std::put_time(&ltm, "%Y-%m-%d_%H-%M-%S") << ".mp4";
+        const std::string ext = (record_format == "mp4v") ? ".mp4" : ".avi";
+        fn << "tracking_" << std::put_time(&ltm, "%Y-%m-%d_%H-%M-%S") << ext;
         record_path = (std::filesystem::path(record_dir) / fn.str()).string();
     }
 
@@ -427,13 +430,14 @@ int main(int argc, char** argv) {
 
         // 首帧到达时按实际尺寸打开 VideoWriter (修复 Galaxy 1280x1024 ≠ 兜底 1280x720 的录制失败)
         if (enable_record && !writer.isOpened()) {
-            writer.open(record_path,
-                        cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
-                        record_fps, frame.size());
+            int fourcc = (record_format == "mp4v")
+                ? cv::VideoWriter::fourcc('m', 'p', '4', 'v')
+                : cv::VideoWriter::fourcc('M', 'J', 'P', 'G');  // mjpg+.avi: 兼容性最好, 强杀也能播
+            writer.open(record_path, fourcc, record_fps, frame.size());
             if (writer.isOpened()) {
                 std::cout << "录制已开: " << record_path
                           << " (" << frame.cols << "x" << frame.rows
-                          << " @ " << record_fps << "fps)\n";
+                          << " @ " << record_fps << "fps, " << record_format << ")\n";
             } else {
                 std::cerr << "✗ VideoWriter 打开失败, 录制关闭: " << record_path << "\n";
                 enable_record = false;
